@@ -1,0 +1,25 @@
+# python generated files
+__init__.py
+*.pyc
+
+# temporary files
+.*.swp
+.#*
+#*#
+*~
+
+# ignore some IDE related files
+*.xcodeproj
+.vscode
+
+# ignore mac-specific file
+.DS_Store
+
+# binary/data files
+*.pb
+*.root
+*.pt
+
+# log files
+*.log
+
