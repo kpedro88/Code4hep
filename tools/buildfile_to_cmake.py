@@ -68,7 +68,7 @@ import pathlib
 import sys
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
-from typing import Iterator, List, Optional, Tuple
+from typing import Optional
 
 # ---------------------------------------------------------------------------
 # Built-in SCRAM tool name → CMake imported target mapping
@@ -188,51 +188,77 @@ class IfNode(BuildFileNode):
 # XML parser
 # ---------------------------------------------------------------------------
 
-def _lineno(elem: ET.Element) -> int:
-    """Return the line number of an element if available."""
-    return getattr(elem, "sourceline", 0)
+import xml.parsers.expat as _expat
 
 
-def _iter_elements_with_line(path: str) -> Tuple[ET.ElementTree, dict]:
-    """
-    Parse XML and return (tree, elem_to_line) dict.
-    Uses iterparse to capture line numbers.
-    """
-    elem_to_line: dict[int, int] = {}
-    try:
-        for event, elem in ET.iterparse(path, events=("start",)):
-            elem_to_line[id(elem)] = getattr(elem, "sourceline",
-                                             getattr(elem, "_start_line_number", 0))
-    except AttributeError:
-        pass
-    tree = ET.parse(path)
-    return tree, elem_to_line
+class _LineElement(ET.Element):
+    """ET.Element subclass that carries a sourceline attribute."""
+    __slots__ = ("sourceline",)
 
 
 def parse_buildfile(path: str) -> list[BuildFileNode]:
     """
     Parse a SCRAM BuildFile.xml and return a list of top-level BuildFileNode instances.
-    """
-    try:
-        tree = ET.parse(path)
-    except ET.ParseError as exc:
-        print(f"ERROR: Cannot parse XML in '{path}': {exc}", file=sys.stderr)
-        sys.exit(2)
 
-    root = tree.getroot()
+    SCRAM BuildFile.xml files have no single root element — they are a flat
+    sequence of sibling elements.  The file content is wrapped in a synthetic
+    <root> element before parsing so that expat sees a well-formed document.
+    The wrapper occupies exactly one line, so reported line numbers are
+    adjusted by -1 to match positions in the original file.
+
+    Line numbers are captured via expat's CurrentLineNumber property, stored on
+    each _LineElement as .sourceline.  _get_line() reads this attribute.
+
+    Raises xml.parsers.expat.ExpatError on malformed XML (with path and
+    adjusted line number prepended), propagating a full traceback to the
+    caller rather than printing and calling sys.exit().
+    """
+    raw = pathlib.Path(path).read_text(encoding="utf-8")
+    wrapped = f"<root>\n{raw}\n</root>"
+    _LINE_OFFSET = 1  # the synthetic <root>\n occupies line 1
+
+    stack: list[_LineElement] = []
+    root_elem: list[_LineElement] = []  # single-element list to avoid nonlocal
+
+    def _start(name: str, attrs: dict) -> None:
+        elem = _LineElement(name, attrs)
+        elem.sourceline = max(0, p.CurrentLineNumber - _LINE_OFFSET)
+        if stack:
+            stack[-1].append(elem)
+        else:
+            root_elem.append(elem)
+        stack.append(elem)
+
+    def _end(name: str) -> None:
+        stack.pop()
+
+    p = _expat.ParserCreate()
+    p.StartElementHandler = _start
+    p.EndElementHandler = _end
+    try:
+        p.Parse(wrapped, True)
+    except _expat.ExpatError as exc:
+        adjusted_line = exc.lineno - _LINE_OFFSET
+        raise _expat.ExpatError(
+            f"{path}:{adjusted_line}:{exc.offset}: {_expat.ErrorString(exc.code)}"
+        ) from None
+
     nodes: list[BuildFileNode] = []
-    _parse_children(root, nodes, path)
+    _parse_children(root_elem[0], nodes, path)
     return nodes
 
 
 def _get_line(elem: ET.Element) -> int:
-    # ElementTree doesn't expose line numbers by default; best-effort.
-    return 0
+    return getattr(elem, "sourceline", 0)
 
 
 def _parse_children(parent: ET.Element, out: list, filepath: str) -> None:
     """Recursively parse child elements of parent into BuildFileNode instances."""
     for elem in parent:
+        # <BuildFile> is an optional transparent wrapper — descend into it directly.
+        if elem.tag.lower() == "buildfile":
+            _parse_children(elem, out, filepath)
+            continue
         node = _parse_element(elem, filepath)
         if node is not None:
             out.append(node)
