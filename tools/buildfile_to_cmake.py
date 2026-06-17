@@ -40,8 +40,7 @@ Options:
                         ast.literal_eval — no imports, no expressions, just a
                         dict. Entries are merged over the built-in
                         SCRAM_TO_CMAKE_TARGETS table, with the file's entries
-                        taking precedence. See tools/scram_cmake_map.py for the
-                        format.
+                        taking precedence. See below for the format.
     --force             Overwrite existing CMakeLists.txt files without prompting.
 
 Exit codes:
@@ -78,7 +77,10 @@ SCRAM_TO_CMAKE_TARGETS: dict[str, str] = {
     "tbb":       "TBB::tbb",
     "rootcore":  "ROOT::Core",
     "root":      "ROOT::Core",
+    "rootmath":  "ROOT::MathMore",
+    "rootgeom":  "ROOT::Geom",
     "boost":     "Boost::boost",
+    "boost_program_options": "Boost::program_options",
     "eigen":     "Eigen3::Eigen",
     "clhep":     "CLHEP::CLHEP",
     "python3":   "Python3::Python",
@@ -92,6 +94,9 @@ SCRAM_TO_CMAKE_TARGETS: dict[str, str] = {
     "edm4hep":   "EDM4HEP::edm4hep",
     "cmsswdata": "cmsswdata::cmsswdata",
     "json":      "nlohmann_json::nlohmann_json",
+    "catch2":    "Catch2::Catch2",
+    "dd4hep-core": "DD4hep::Core",
+    "dd4hep":    "DD4hep::DDAlign DD4hep::DDCond",
 }
 
 # ---------------------------------------------------------------------------
@@ -1060,6 +1065,13 @@ def _write_file(
 # CLI entry point
 # ---------------------------------------------------------------------------
 
+class ArgumentDefaultsRawHelpFormatter(
+    argparse.ArgumentDefaultsHelpFormatter,
+    argparse.RawTextHelpFormatter,
+    argparse.RawDescriptionHelpFormatter):
+    """HelpFormatter that adds default values AND doesn't do line-wrapping"""
+pass
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="buildfile_to_cmake.py",
@@ -1068,7 +1080,7 @@ def main() -> None:
             "the Code4HepBuild (c4h_*) CMake functions.  Run on a single file "
             "or use --scan-dir to convert an entire package tree at once."
         ),
-        formatter_class=argparse.RawDescriptionHelpFormatter,
+        formatter_class=ArgumentDefaultsRawHelpFormatter,
         epilog="""
 Scan-dir mode (--scan-dir DIR):
   Converts every BuildFile.xml found recursively under DIR.  Additionally:
@@ -1091,7 +1103,6 @@ Map file format:
           "root": "ROOT::Core ROOT::RIO",   # override to add ROOT::RIO
       }
   The file is read with ast.literal_eval — no imports or expressions allowed.
-  See tools/scram_cmake_map.py for a complete example.
 
 Exit codes:
   0   Conversion successful (no unsupported features).
