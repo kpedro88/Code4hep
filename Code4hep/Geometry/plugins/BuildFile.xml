@@ -3,6 +3,6 @@
 <library name="DetectorDescriptionPlugins" file="*.cc">
   <use name="Code4hep/Geometry"/>
   <use name="Code4hep/GeometryRecords"/>
-  <lib name="Geom"/>
+  <use name="rootgeom"/>
   <flags EDM_PLUGIN="1"/>
 </library>
