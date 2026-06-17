@@ -1043,7 +1043,7 @@ def convert(nodes: list[BuildFileNode], ctx: ConvertContext) -> list[str]:
     library_nodes = [n for n in nodes if isinstance(n, LibraryNode)]
     shared_var: Optional[str] = None
 
-    if len(library_nodes) >= 2 and (top_uses or top_libs or top_include_paths):
+    if library_nodes and (top_uses or top_libs or top_include_paths):
         # Compute what the shared portion would be.
         shared_internal, shared_external, _ = _uses_to_deps(top_uses, ctx)
         shared_link_libs = [ln.name for ln in top_libs if ln.name]
