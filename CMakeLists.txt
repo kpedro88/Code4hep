@@ -5,6 +5,11 @@ project(code4hep
     LANGUAGES CXX
 )
 
+# Set C++ standard (C++20 required for concepts)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
