@@ -1187,7 +1187,7 @@ def _write_file(
             print(f"Skipped '{display}'.", file=sys.stderr)
             return
     path.write_text(content, encoding="utf-8")
-    print(f"Written: {display}", file=sys.stderr)
+    print(f"{'Converted' if display==label else 'Written'}: {display}", file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
