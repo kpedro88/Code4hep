@@ -44,6 +44,9 @@ Options:
                         SCRAM_TO_CMAKE_TARGETS table, with the file's entries
                         taking precedence. See below for the format.
     --force             Overwrite existing CMakeLists.txt files without prompting.
+    --confirm           Omit the 'Review before committing.' note from the
+                        generated header. Use after reviewing the output to
+                        produce the final committed version.
 
 Exit codes:
     0   Conversion successful (no unsupported features encountered).
@@ -589,29 +592,73 @@ def _format_c4h_call(
     return lines
 
 
+def _format_shared_var(
+    var_name: str,
+    internal_deps: list[str],
+    external_deps: list[str],
+    link_libs: list[str],
+    include_paths: list[str],
+) -> list[str]:
+    """
+    Emit  set(<var_name>  DEPS ... EXT_DEPS ... LINK_LIBS ... INCLUDE_DIRS ...)
+    for use as a shared-dependency variable when multiple <library> elements in
+    one BuildFile all inherit the same top-level deps.
+    """
+    lines = [f"set({var_name}"]
+    if internal_deps:
+        lines.append("    DEPS")
+        for d in internal_deps:
+            lines.append(f"        {d}")
+    if external_deps:
+        lines.append("    EXT_DEPS")
+        for d in external_deps:
+            lines.append(f"        {d}")
+    if link_libs:
+        lines.append("    LINK_LIBS")
+        for lb in link_libs:
+            lines.append(f"        {lb}")
+    if include_paths:
+        lines.append("    INCLUDE_DIRS")
+        for p in include_paths:
+            lines.append(f"        {p}")
+    lines.append(")")
+    return lines
+
+
 def _convert_library(node: LibraryNode, ctx: ConvertContext,
                      top_include_paths: list[str],
                      top_uses: Optional[list["UseNode"]] = None,
                      top_libs: Optional[list["LibNode"]] = None,
-                     top_flags: Optional[list["FlagsNode"]] = None) -> list[str]:
+                     top_flags: Optional[list["FlagsNode"]] = None,
+                     shared_var: Optional[str] = None) -> list[str]:
     """Convert a <library> element.
 
     top_uses, top_libs, and top_flags are the top-level nodes from the same
     BuildFile — SCRAM convention is that these are inherited by every <library>.
+
+    shared_var: when set, the top-level shared deps have already been emitted
+    as a CMake variable with this name. The call receives a '${shared_var}'
+    expansion token instead of inlining them, and only element-level deps
+    (those nested inside the <library> element itself) are inlined.
     """
     # Merge flags: top-level flags first, then element-level (element wins on conflicts).
     combined_flags_nodes = (top_flags or []) + node.flags
     flags = _collect_flags(combined_flags_nodes)
     is_plugin = flags.get("EDM_PLUGIN", "0") == "1"
 
-    # Merge deps: top-level uses are inherited by all libraries.
-    combined_uses = (top_uses or []) + node.uses
+    if shared_var:
+        # Shared top-level deps go via ${shared_var}; only element-level inline.
+        combined_uses = node.uses
+        link_libs = [ln.name for ln in node.libs if ln.name]
+        include_dirs = [ip.path for ip in node.include_paths]
+    else:
+        # Merge deps: top-level uses are inherited by all libraries.
+        combined_uses = (top_uses or []) + node.uses
+        # Raw linker libs from <lib name="mylib"/> — top-level + element-level.
+        link_libs = [ln.name for ln in (top_libs or []) + node.libs if ln.name]
+        include_dirs = [ip.path for ip in node.include_paths] + top_include_paths
+
     internal_deps, external_deps, dep_warnings = _uses_to_deps(combined_uses, ctx, node.line)
-
-    # Raw linker libs from <lib name="mylib"/> — top-level + element-level.
-    link_libs = [ln.name for ln in (top_libs or []) + node.libs if ln.name]
-
-    include_dirs = [ip.path for ip in node.include_paths] + top_include_paths
 
     out: list[str] = []
     out.extend(dep_warnings)
@@ -635,6 +682,8 @@ def _convert_library(node: LibraryNode, ctx: ConvertContext,
             args.append(("LINK_LIBS", link_libs))
         if include_dirs:
             args.append(("INCLUDE_DIRS", include_dirs))
+        if shared_var:
+            args.append((f"${{{shared_var}}}", None))
         out.extend(_format_c4h_call("c4h_add_plugin", args, comment=elem_comment))
     else:
         args = []
@@ -668,6 +717,8 @@ def _convert_library(node: LibraryNode, ctx: ConvertContext,
             args.append(("LINK_LIBS", link_libs))
         if include_dirs:
             args.append(("INCLUDE_DIRS", include_dirs))
+        if shared_var:
+            args.append((f"${{{shared_var}}}", None))
         out.extend(_format_c4h_call("c4h_add_library", args, comment=elem_comment))
 
     # Handle remaining flags
@@ -811,7 +862,8 @@ def _convert_if(node: IfNode, ctx: ConvertContext,
                 top_include_paths: list[str],
                 top_uses: Optional[list["UseNode"]] = None,
                 top_libs: Optional[list["LibNode"]] = None,
-                top_flags: Optional[list["FlagsNode"]] = None) -> list[str]:
+                top_flags: Optional[list["FlagsNode"]] = None,
+                shared_var: Optional[str] = None) -> list[str]:
     """Convert an <if> / <elif> / <else> chain."""
     out: list[str] = []
     for i, (cond_str, children) in enumerate(node.branches):
@@ -831,7 +883,7 @@ def _convert_if(node: IfNode, ctx: ConvertContext,
         for child in children:
             child_lines = _convert_node(child, ctx, top_include_paths,
                                         top_uses=top_uses, top_libs=top_libs,
-                                        top_flags=top_flags)
+                                        top_flags=top_flags, shared_var=shared_var)
             out.extend("    " + ln for ln in child_lines)
 
     out.append("endif()")
@@ -845,12 +897,13 @@ def _convert_node(
     top_uses: Optional[list["UseNode"]] = None,
     top_libs: Optional[list["LibNode"]] = None,
     top_flags: Optional[list["FlagsNode"]] = None,
+    shared_var: Optional[str] = None,
 ) -> list[str]:
     """Dispatch a single BuildFileNode to the appropriate converter."""
     if isinstance(node, LibraryNode):
         return _convert_library(node, ctx, top_include_paths,
                                 top_uses=top_uses, top_libs=top_libs,
-                                top_flags=top_flags)
+                                top_flags=top_flags, shared_var=shared_var)
     if isinstance(node, BinNode):
         return _convert_bin(node, ctx, top_include_paths)
     if isinstance(node, TestNode):
@@ -858,7 +911,7 @@ def _convert_node(
     if isinstance(node, IfNode):
         return _convert_if(node, ctx, top_include_paths,
                            top_uses=top_uses, top_libs=top_libs,
-                           top_flags=top_flags)
+                           top_flags=top_flags, shared_var=shared_var)
     if isinstance(node, (UseNode, LibNode, FlagsNode, IncludePathNode, ExportNode)):
         # These are handled at the top level by convert(); skip here.
         return []
@@ -985,15 +1038,39 @@ def convert(nodes: list[BuildFileNode], ctx: ConvertContext) -> list[str]:
                 "# Add include path to consumers via target_include_directories if needed."
             )
 
+    # When there are multiple <library> elements and there are shared top-level
+    # deps, emit a set(_c4h_shared ...) variable so the deps appear only once.
+    library_nodes = [n for n in nodes if isinstance(n, LibraryNode)]
+    shared_var: Optional[str] = None
+
+    if len(library_nodes) >= 2 and (top_uses or top_libs or top_include_paths):
+        # Compute what the shared portion would be.
+        shared_internal, shared_external, _ = _uses_to_deps(top_uses, ctx)
+        shared_link_libs = [ln.name for ln in top_libs if ln.name]
+
+        if shared_internal or shared_external or shared_link_libs or top_include_paths:
+            shared_var = "_c4h_shared"
+            statements.append(
+                "# Shared dependencies inherited by all <library> elements in this file."
+            )
+            statements.extend(_format_shared_var(
+                shared_var,
+                shared_internal,
+                shared_external,
+                shared_link_libs,
+                top_include_paths,
+            ))
+
     # Convert remaining (non-use, non-lib, non-export, non-include_path, non-flags) nodes.
-    # Pass top_uses, top_libs, and top_flags so <library> elements inherit them.
+    # Pass top_uses, top_libs, and top_flags so <library> elements inherit them, and
+    # shared_var so they reference the set() variable instead of inlining when set.
     for node in nodes:
         if isinstance(node, (UseNode, LibNode, ExportNode, IncludePathNode, FlagsNode)):
             continue  # already handled above
 
         stmts = _convert_node(node, ctx, top_include_paths,
                               top_uses=top_uses, top_libs=top_libs,
-                              top_flags=top_flags)
+                              top_flags=top_flags, shared_var=shared_var)
         if stmts:
             statements.append("")  # blank line between calls
             statements.extend(stmts)
@@ -1004,16 +1081,20 @@ def convert(nodes: list[BuildFileNode], ctx: ConvertContext) -> list[str]:
 # Renderer
 # ---------------------------------------------------------------------------
 
-def render(statements: list[str], source_path: str) -> str:
+def render(statements: list[str], source_path: str, confirmed: bool = False) -> str:
     """
     Render a list of statement strings to final CMakeLists.txt text.
     Adds the required header comment.
+    Pass confirmed=True (--confirm flag) to omit the 'Review before committing.' note.
     """
-    lines: list[str] = [
-        "# Auto-generated by buildfile_to_cmake.py from BuildFile.xml. "
-        "Review before committing.",
-        "",
-    ]
+    if confirmed:
+        header = "# Auto-generated by buildfile_to_cmake.py from BuildFile.xml."
+    else:
+        header = (
+            "# Auto-generated by buildfile_to_cmake.py from BuildFile.xml. "
+            "Review before committing."
+        )
+    lines: list[str] = [header, ""]
     lines.extend(statements)
     # Ensure trailing newline
     text = "\n".join(lines)
@@ -1063,6 +1144,7 @@ def scan_directory(
     project_name: str,
     dry_run: bool,
     force: bool,
+    confirmed: bool = False,
 ) -> int:
     """
     Walk scan_root recursively, converting every BuildFile.xml found.
@@ -1143,7 +1225,7 @@ def scan_directory(
             )
             statements.append("c4h_auto_subdirectories()")
 
-        output_text = render(statements, str(bf))
+        output_text = render(statements, str(bf), confirmed=confirmed)
         out_path = bf.parent / "CMakeLists.txt"
         _write_file(out_path, output_text, dry_run, force,
                     label=str(bf.relative_to(scan_root_resolved.parent)))
@@ -1292,6 +1374,14 @@ Exit codes:
         action="store_true",
         help="Overwrite existing CMakeLists.txt files without prompting",
     )
+    parser.add_argument(
+        "--confirm",
+        action="store_true",
+        help=(
+            "Omit the 'Review before committing.' note from the generated header. "
+            "Use after reviewing the output to produce the final version."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -1322,6 +1412,7 @@ Exit codes:
             project_name=args.project,
             dry_run=args.dry_run,
             force=args.force,
+            confirmed=args.confirm,
         )
         sys.exit(rc)
 
@@ -1362,6 +1453,7 @@ Exit codes:
         target_map=target_map,
     )
     statements = convert(nodes, ctx)
+    confirmed = args.confirm
 
     # Append c4h_auto_subdirectories() if any direct child directory has either
     # a BuildFile.xml (will be converted separately) or already has a CMakeLists.txt
@@ -1382,7 +1474,7 @@ Exit codes:
         )
         statements.append("c4h_auto_subdirectories()")
 
-    output_text = render(statements, str(buildfile_path))
+    output_text = render(statements, str(buildfile_path), confirmed=confirmed)
 
     if output_path is None:
         print(output_text, end="")
