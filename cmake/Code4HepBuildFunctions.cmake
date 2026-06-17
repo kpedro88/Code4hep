@@ -22,7 +22,6 @@ cmake_minimum_required(VERSION 3.23)
 #   code4hep/DataFormats       -> DataFormats
 #   code4hep/PodioUtilities    -> PodioUtilities
 #   stitched/FWCore/Common     -> FWCore_Common
-#   stitched/L1Trigger/L1THGCal -> L1Trigger_L1THGCal
 # ---------------------------------------------------------------------------
 function(_c4h_derive_target_name OUT_VAR OUT_PATH_VAR)
     file(RELATIVE_PATH _rel "${CMAKE_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -46,107 +45,87 @@ function(c4h_register_upstream project_name)
 endfunction()
 
 # ---------------------------------------------------------------------------
-# Built-in CMake namespace → find_package() spec table.
+# Automatic find_package() for EXT_DEPS targets.
 #
-# Each entry in the C4H_EXT_PACKAGE_TABLE global property has the form:
-#   <namespace>|<PackageName>[|<extra_args>]
-# where <extra_args> is passed verbatim after REQUIRED (e.g. "CONFIG").
+# When a developer writes EXT_DEPS podio::podio (or ROOT::Core, TBB::tbb,
+# etc.), the c4h_* functions call _c4h_auto_find_package() with the namespace
+# extracted from the target string.  The rules are:
 #
-# Populated at load time by _c4h_init_ext_table().
-# Extended at runtime by c4h_register_ext_package().
+#   Default:  find_package(<namespace> REQUIRED)
+#   Override: if C4H_EXT_NAME_<namespace> is set, use that as the package name.
+#             if C4H_EXT_ARGS_<namespace> is set, append it after REQUIRED.
+#
+# Built-in overrides cover the two real exception categories:
+#   Name differs from namespace:  SQLite  → SQLite3
+#   Needs CONFIG mode:            podio, EDM4HEP, cmsswdata, nlohmann_json, HepMC3
+#
+# Everything else (ROOT, TBB, Boost, Eigen3, CLHEP, Python3, XROOTD, ZLIB,
+# BZip2, LibLZMA, OpenSSL, …) works with the default rule, so no entry is
+# needed for them at all.
+#
+# c4h_register_ext_package(NAMESPACE <ns> [PACKAGE <name>] [EXTRA_ARGS <...>])
+# adds or overrides a mapping for project-specific externals.
 # ---------------------------------------------------------------------------
-function(_c4h_init_ext_table)
-    get_property(_already_set GLOBAL PROPERTY C4H_EXT_TABLE_INIT)
-    if(_already_set)
-        return()
-    endif()
-    set_property(GLOBAL PROPERTY C4H_EXT_TABLE_INIT TRUE)
 
-    foreach(_entry IN ITEMS
-        "ROOT|ROOT"
-        "TBB|TBB"
-        "Boost|Boost"
-        "Eigen3|Eigen3"
-        "CLHEP|CLHEP"
-        "Python3|Python3"
-        "XROOTD|XROOTD"
-        "SQLite|SQLite3"
-        "ZLIB|ZLIB"
-        "BZip2|BZip2"
-        "LibLZMA|LibLZMA"
-        "OpenSSL|OpenSSL"
-        "podio|podio|CONFIG"
-        "EDM4HEP|EDM4HEP|CONFIG"
-        "cmsswdata|cmsswdata|CONFIG"
-        "nlohmann_json|nlohmann_json|CONFIG"
-        "HepMC3|HepMC3|CONFIG"
-    )
-        set_property(GLOBAL APPEND PROPERTY C4H_EXT_PACKAGE_TABLE "${_entry}")
+# Built-in exceptions — set once at include time via a guard property.
+get_property(_c4h_ext_init GLOBAL PROPERTY C4H_EXT_INIT SET)
+if(NOT _c4h_ext_init)
+    set_property(GLOBAL PROPERTY C4H_EXT_INIT TRUE)
+    # Name differs from namespace
+    set_property(GLOBAL PROPERTY C4H_EXT_NAME_SQLite "SQLite3")
+    # Packages that require CONFIG mode
+    foreach(_ns IN ITEMS podio EDM4HEP cmsswdata nlohmann_json HepMC3)
+        set_property(GLOBAL PROPERTY "C4H_EXT_ARGS_${_ns}" "CONFIG")
     endforeach()
-endfunction()
-
-# Initialise at include time.
-_c4h_init_ext_table()
+endif()
 
 # ---------------------------------------------------------------------------
-# c4h_register_ext_package(NAMESPACE <ns> PACKAGE <name> [EXTRA_ARGS <...>])
+# c4h_register_ext_package(NAMESPACE <ns> [PACKAGE <name>] [EXTRA_ARGS <...>])
 #
-# Register an additional namespace → find_package() mapping so that
-# EXT_DEPS entries like "MyLib::Foo" are found automatically.
-# Call this from the top-level CMakeLists.txt for project-specific externals.
+# Register or override the find_package() behaviour for a CMake namespace.
+# Only needed for packages where the default rule (find_package(<namespace>
+# REQUIRED)) does not work — i.e., the package name differs from the namespace,
+# or CONFIG / other args are required.
 #
-# Example:
-#   c4h_register_ext_package(NAMESPACE HepMC3 PACKAGE HepMC3 EXTRA_ARGS CONFIG)
+# NAMESPACE   The namespace prefix appearing before '::' in the CMake target
+#             (e.g. "MyLib" for "MyLib::Core").
+# PACKAGE     Package name passed to find_package(). Defaults to NAMESPACE.
+# EXTRA_ARGS  Arguments appended after REQUIRED (e.g. CONFIG, or version req).
+#
+# Examples:
+#   # Package ships only a CMake config file:
+#   c4h_register_ext_package(NAMESPACE Acts EXTRA_ARGS CONFIG)
+#
+#   # Package name does not match namespace:
+#   c4h_register_ext_package(NAMESPACE SQLite PACKAGE SQLite3)
 # ---------------------------------------------------------------------------
 function(c4h_register_ext_package)
     cmake_parse_arguments(_REG "" "NAMESPACE;PACKAGE" "EXTRA_ARGS" ${ARGN})
-    if(NOT _REG_NAMESPACE OR NOT _REG_PACKAGE)
-        message(FATAL_ERROR
-            "c4h_register_ext_package: NAMESPACE and PACKAGE are required.")
+    if(NOT _REG_NAMESPACE)
+        message(FATAL_ERROR "c4h_register_ext_package: NAMESPACE is required.")
+    endif()
+    if(_REG_PACKAGE)
+        set_property(GLOBAL PROPERTY "C4H_EXT_NAME_${_REG_NAMESPACE}" "${_REG_PACKAGE}")
     endif()
     if(_REG_EXTRA_ARGS)
-        string(JOIN " " _extra "${_REG_EXTRA_ARGS}")
-        set(_entry "${_REG_NAMESPACE}|${_REG_PACKAGE}|${_extra}")
-    else()
-        set(_entry "${_REG_NAMESPACE}|${_REG_PACKAGE}")
+        string(JOIN " " _extra ${_REG_EXTRA_ARGS})
+        set_property(GLOBAL PROPERTY "C4H_EXT_ARGS_${_REG_NAMESPACE}" "${_extra}")
     endif()
-    set_property(GLOBAL APPEND PROPERTY C4H_EXT_PACKAGE_TABLE "${_entry}")
 endfunction()
 
 # ---------------------------------------------------------------------------
-# Internal: ensure a package providing <namespace>:: targets is found.
-# Looks up <namespace> in C4H_EXT_PACKAGE_TABLE, then calls find_package()
-# if the canonical target doesn't exist yet.  Idempotent: CMake's own
-# find_package caching makes repeated calls free once a package is found.
+# Internal: call find_package() for the package that provides <namespace>::
+# targets, using the override properties if present, defaulting to
+# find_package(<namespace> REQUIRED).  Idempotent — CMake's find_package
+# caching makes repeated calls free once the package is found.
 # ---------------------------------------------------------------------------
 function(_c4h_auto_find_package namespace)
-    get_property(_table GLOBAL PROPERTY C4H_EXT_PACKAGE_TABLE)
-    foreach(_entry IN LISTS _table)
-        string(REPLACE "|" ";" _parts "${_entry}")
-        list(GET _parts 0 _ns)
-        if(NOT "${_ns}" STREQUAL "${namespace}")
-            continue()
-        endif()
-        list(GET _parts 1 _pkg)
-        list(LENGTH _parts _nparts)
-        set(_extra "")
-        if(_nparts GREATER 2)
-            list(GET _parts 2 _extra)
-        endif()
-        # find_package is idempotent once a package is found.
-        if(_extra)
-            find_package(${_pkg} REQUIRED ${_extra})
-        else()
-            find_package(${_pkg} REQUIRED)
-        endif()
-        return()
-    endforeach()
-    # No entry found — emit an informational warning; the user can register
-    # the package manually or via c4h_register_ext_package().
-    message(WARNING
-        "c4h: No find_package spec registered for namespace '${namespace}'. "
-        "Call c4h_register_ext_package(NAMESPACE ${namespace} PACKAGE <name>) "
-        "in the top-level CMakeLists.txt, or ensure the package is already found.")
+    get_property(_pkg_name GLOBAL PROPERTY "C4H_EXT_NAME_${namespace}")
+    if(NOT _pkg_name)
+        set(_pkg_name "${namespace}")
+    endif()
+    get_property(_extra GLOBAL PROPERTY "C4H_EXT_ARGS_${namespace}")
+    find_package(${_pkg_name} REQUIRED ${_extra})
 endfunction()
 
 # ---------------------------------------------------------------------------
