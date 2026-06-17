@@ -7,31 +7,31 @@ Usage:
     buildfile_to_cmake.py [OPTIONS] [BUILDFILE]
     buildfile_to_cmake.py --scan-dir DIR [OPTIONS]
 
+All paths (BUILDFILE, --scan-dir DIR, --output FILE, --map FILE) may be
+relative (resolved against the current working directory) or absolute.
+
 Single-file mode:
-    BUILDFILE           Absolute path to BuildFile.xml. Defaults to ./BuildFile.xml.
+    BUILDFILE           Path to BuildFile.xml. Defaults to ./BuildFile.xml.
+                        Output is written to CMakeLists.txt in the same
+                        directory, unless -o/--output overrides it.
 
 Scan-dir mode (--scan-dir DIR):
-    Recursively converts every BuildFile.xml found under absolute path DIR.
-    Also:
+    Recursively converts every BuildFile.xml found under DIR. Also:
       - Generates mid-level structural CMakeLists.txt files (directories that
         contain no BuildFile.xml of their own but have package children) that
         call c4h_auto_subdirectories().
       - Appends c4h_auto_subdirectories() to any package CMakeLists.txt whose
-        directory has direct child directories that also have a BuildFile.xml
-        (e.g. DataFormats/ → DataFormats/plugins/).
-      - Writes cmake/FindPackagesAuto.cmake listing all find_package() calls
-        needed for external dependencies found across the whole tree.
-        Include it from your top-level CMakeLists.txt with:
-            include(cmake/FindPackagesAuto.cmake)
+        directory has child directories that will have a CMakeLists.txt after
+        the scan (e.g. DataFormats/ → DataFormats/plugins/).
+    external find_package() calls are NOT generated; they are handled
+    automatically at CMake configure time by the c4h_auto_find_package()
+    mechanism in Code4HepBuildFunctions.cmake.
 
 Options:
     -o, --output FILE   Output path. Defaults to CMakeLists.txt in the same
                         directory as BUILDFILE. Use '-' for stdout.
                         Ignored in --scan-dir mode.
-    --scan-dir DIR      Convert all BuildFile.xml files under absolute path DIR
-                        (recursive).
-    --cmake-dir DIR     Where to write FindPackagesAuto.cmake.
-                        Defaults to <scan-dir>/../cmake/.
+    --scan-dir DIR      Convert all BuildFile.xml files under DIR (recursive).
     --project NAME      The CMake project name (e.g. "code4hep"). Used only for
                         informational comments in the output; functions derive
                         target names automatically at CMake configure time.
@@ -154,10 +154,17 @@ class ExportNode(BuildFileNode):
 
 
 @dataclass
+class LibNode(BuildFileNode):
+    """Represents a <lib name="mylib"/> element — raw linker library (-lmylib)."""
+    name: str = ""
+
+
+@dataclass
 class LibraryNode(BuildFileNode):
     name: str = ""
     file_patterns: list[str] = field(default_factory=list)
     uses: list[UseNode] = field(default_factory=list)
+    libs: list["LibNode"] = field(default_factory=list)
     flags: list[FlagsNode] = field(default_factory=list)
     include_paths: list[IncludePathNode] = field(default_factory=list)
 
@@ -167,6 +174,7 @@ class BinNode(BuildFileNode):
     name: str = ""
     file: str = ""
     uses: list[UseNode] = field(default_factory=list)
+    libs: list["LibNode"] = field(default_factory=list)
     include_paths: list[IncludePathNode] = field(default_factory=list)
 
 
@@ -175,6 +183,7 @@ class TestNode(BuildFileNode):
     name: str = ""
     command: str = ""
     uses: list[UseNode] = field(default_factory=list)
+    libs: list["LibNode"] = field(default_factory=list)
     flags: list[FlagsNode] = field(default_factory=list)
 
 
@@ -285,6 +294,18 @@ def _parse_element(elem: ET.Element, filepath: str) -> Optional[BuildFileNode]:
         n.path = elem.attrib.get("path", "")
         return n
 
+    if tag == "lib":
+        lib_name = elem.attrib.get("name", "")
+        if lib_name == "1":
+            # <lib name="1"/> inside <export> — handled by the export parser below
+            # but we may also encounter it standalone; treat as export marker.
+            n = ExportNode(tag="export", line=line, attrib=dict(elem.attrib))
+            n.has_lib = True
+            return n
+        n = LibNode(tag="lib", line=line, attrib=dict(elem.attrib))
+        n.name = lib_name
+        return n
+
     if tag == "export":
         n = ExportNode(tag="export", line=line, attrib=dict(elem.attrib))
         for child in elem:
@@ -303,6 +324,8 @@ def _parse_element(elem: ET.Element, filepath: str) -> Optional[BuildFileNode]:
             child_node = _parse_element(child, filepath)
             if isinstance(child_node, UseNode):
                 n.uses.append(child_node)
+            elif isinstance(child_node, LibNode):
+                n.libs.append(child_node)
             elif isinstance(child_node, FlagsNode):
                 n.flags.append(child_node)
             elif isinstance(child_node, IncludePathNode):
@@ -317,6 +340,8 @@ def _parse_element(elem: ET.Element, filepath: str) -> Optional[BuildFileNode]:
             child_node = _parse_element(child, filepath)
             if isinstance(child_node, UseNode):
                 n.uses.append(child_node)
+            elif isinstance(child_node, LibNode):
+                n.libs.append(child_node)
             elif isinstance(child_node, IncludePathNode):
                 n.include_paths.append(child_node)
         return n
@@ -329,6 +354,8 @@ def _parse_element(elem: ET.Element, filepath: str) -> Optional[BuildFileNode]:
             child_node = _parse_element(child, filepath)
             if isinstance(child_node, UseNode):
                 n.uses.append(child_node)
+            elif isinstance(child_node, LibNode):
+                n.libs.append(child_node)
             elif isinstance(child_node, FlagsNode):
                 n.flags.append(child_node)
         return n
@@ -563,15 +590,26 @@ def _format_c4h_call(
 
 
 def _convert_library(node: LibraryNode, ctx: ConvertContext,
-                     top_include_paths: list[str]) -> list[str]:
-    """Convert a <library> element."""
-    flags = _collect_flags(node.flags)
-    is_plugin = (
-        flags.get("EDM_PLUGIN", "0") == "1"
-        or flags.get("EDM_PLUGIN", "") == "1"
-    )
+                     top_include_paths: list[str],
+                     top_uses: Optional[list["UseNode"]] = None,
+                     top_libs: Optional[list["LibNode"]] = None,
+                     top_flags: Optional[list["FlagsNode"]] = None) -> list[str]:
+    """Convert a <library> element.
 
-    internal_deps, external_deps, dep_warnings = _uses_to_deps(node.uses, ctx, node.line)
+    top_uses, top_libs, and top_flags are the top-level nodes from the same
+    BuildFile — SCRAM convention is that these are inherited by every <library>.
+    """
+    # Merge flags: top-level flags first, then element-level (element wins on conflicts).
+    combined_flags_nodes = (top_flags or []) + node.flags
+    flags = _collect_flags(combined_flags_nodes)
+    is_plugin = flags.get("EDM_PLUGIN", "0") == "1"
+
+    # Merge deps: top-level uses are inherited by all libraries.
+    combined_uses = (top_uses or []) + node.uses
+    internal_deps, external_deps, dep_warnings = _uses_to_deps(combined_uses, ctx, node.line)
+
+    # Raw linker libs from <lib name="mylib"/> — top-level + element-level.
+    link_libs = [ln.name for ln in (top_libs or []) + node.libs if ln.name]
 
     include_dirs = [ip.path for ip in node.include_paths] + top_include_paths
 
@@ -593,6 +631,8 @@ def _convert_library(node: LibraryNode, ctx: ConvertContext,
             args.append(("DEPS", internal_deps))
         if external_deps:
             args.append(("EXT_DEPS", external_deps))
+        if link_libs:
+            args.append(("LINK_LIBS", link_libs))
         if include_dirs:
             args.append(("INCLUDE_DIRS", include_dirs))
         out.extend(_format_c4h_call("c4h_add_plugin", args, comment=elem_comment))
@@ -624,6 +664,8 @@ def _convert_library(node: LibraryNode, ctx: ConvertContext,
             args.append(("DEPS", internal_deps))
         if external_deps:
             args.append(("EXT_DEPS", external_deps))
+        if link_libs:
+            args.append(("LINK_LIBS", link_libs))
         if include_dirs:
             args.append(("INCLUDE_DIRS", include_dirs))
         out.extend(_format_c4h_call("c4h_add_library", args, comment=elem_comment))
@@ -667,6 +709,7 @@ def _convert_bin(node: BinNode, ctx: ConvertContext,
                  top_include_paths: list[str]) -> list[str]:
     """Convert a <bin> element."""
     internal_deps, external_deps, dep_warnings = _uses_to_deps(node.uses, ctx, node.line)
+    link_libs = [ln.name for ln in node.libs if ln.name]
     include_dirs = [ip.path for ip in node.include_paths] + top_include_paths
 
     elem_comment = f'<bin name="{node.name}" file="{node.file}">'
@@ -677,6 +720,8 @@ def _convert_bin(node: BinNode, ctx: ConvertContext,
         args.append(("DEPS", internal_deps))
     if external_deps:
         args.append(("EXT_DEPS", external_deps))
+    if link_libs:
+        args.append(("LINK_LIBS", link_libs))
     if include_dirs:
         args.append(("INCLUDE_DIRS", include_dirs))
 
@@ -688,6 +733,7 @@ def _convert_bin(node: BinNode, ctx: ConvertContext,
 def _convert_test(node: TestNode, ctx: ConvertContext) -> list[str]:
     """Convert a <test> element."""
     internal_deps, external_deps, dep_warnings = _uses_to_deps(node.uses, ctx, node.line)
+    link_libs = [ln.name for ln in node.libs if ln.name]
     flags = _collect_flags(node.flags)
 
     cmd = node.command
@@ -720,6 +766,8 @@ def _convert_test(node: TestNode, ctx: ConvertContext) -> list[str]:
         args.append(("DEPS", internal_deps))
     if external_deps:
         args.append(("EXT_DEPS", external_deps))
+    if link_libs:
+        args.append(("LINK_LIBS", link_libs))
     if env_pairs:
         args.append(("ENVIRONMENT", env_pairs))
     if depends:
@@ -760,7 +808,10 @@ def _unsupported_explanation(flag_name: str) -> str:
 
 
 def _convert_if(node: IfNode, ctx: ConvertContext,
-                top_include_paths: list[str]) -> list[str]:
+                top_include_paths: list[str],
+                top_uses: Optional[list["UseNode"]] = None,
+                top_libs: Optional[list["LibNode"]] = None,
+                top_flags: Optional[list["FlagsNode"]] = None) -> list[str]:
     """Convert an <if> / <elif> / <else> chain."""
     out: list[str] = []
     for i, (cond_str, children) in enumerate(node.branches):
@@ -778,7 +829,9 @@ def _convert_if(node: IfNode, ctx: ConvertContext,
             out.append("else()")
 
         for child in children:
-            child_lines = _convert_node(child, ctx, top_include_paths)
+            child_lines = _convert_node(child, ctx, top_include_paths,
+                                        top_uses=top_uses, top_libs=top_libs,
+                                        top_flags=top_flags)
             out.extend("    " + ln for ln in child_lines)
 
     out.append("endif()")
@@ -789,17 +842,24 @@ def _convert_node(
     node: BuildFileNode,
     ctx: ConvertContext,
     top_include_paths: list[str],
+    top_uses: Optional[list["UseNode"]] = None,
+    top_libs: Optional[list["LibNode"]] = None,
+    top_flags: Optional[list["FlagsNode"]] = None,
 ) -> list[str]:
     """Dispatch a single BuildFileNode to the appropriate converter."""
     if isinstance(node, LibraryNode):
-        return _convert_library(node, ctx, top_include_paths)
+        return _convert_library(node, ctx, top_include_paths,
+                                top_uses=top_uses, top_libs=top_libs,
+                                top_flags=top_flags)
     if isinstance(node, BinNode):
         return _convert_bin(node, ctx, top_include_paths)
     if isinstance(node, TestNode):
         return _convert_test(node, ctx)
     if isinstance(node, IfNode):
-        return _convert_if(node, ctx, top_include_paths)
-    if isinstance(node, (UseNode, FlagsNode, IncludePathNode, ExportNode)):
+        return _convert_if(node, ctx, top_include_paths,
+                           top_uses=top_uses, top_libs=top_libs,
+                           top_flags=top_flags)
+    if isinstance(node, (UseNode, LibNode, FlagsNode, IncludePathNode, ExportNode)):
         # These are handled at the top level by convert(); skip here.
         return []
     # Unknown element
@@ -821,8 +881,9 @@ def convert(nodes: list[BuildFileNode], ctx: ConvertContext) -> list[str]:
     """
     statements: list[str] = []
 
-    # Collect top-level uses, export, and include_paths
+    # Collect top-level uses, libs, export, and include_paths
     top_uses: list[UseNode] = []
+    top_libs: list[LibNode] = []
     top_export: Optional[ExportNode] = None
     top_include_paths: list[str] = []
     top_flags: list[FlagsNode] = []
@@ -830,6 +891,8 @@ def convert(nodes: list[BuildFileNode], ctx: ConvertContext) -> list[str]:
     for node in nodes:
         if isinstance(node, UseNode):
             top_uses.append(node)
+        elif isinstance(node, LibNode):
+            top_libs.append(node)
         elif isinstance(node, ExportNode):
             top_export = node
         elif isinstance(node, IncludePathNode):
@@ -846,37 +909,57 @@ def convert(nodes: list[BuildFileNode], ctx: ConvertContext) -> list[str]:
     has_explicit_library = any(isinstance(n, LibraryNode) for n in nodes)
     has_bin = any(isinstance(n, BinNode) for n in nodes)
 
-    if top_uses and not has_explicit_library:
-        # Always resolve deps so ext_targets_seen is populated (needed for --scan-dir
-        # find_package generation even for header-only packages).
+    top_flags_merged = _collect_flags(top_flags)
+
+    top_link_libs = [ln.name for ln in top_libs if ln.name]
+
+    if not has_explicit_library:
         internal_deps, external_deps, dep_warnings = _uses_to_deps(top_uses, ctx)
+        is_implicit_plugin = top_flags_merged.get("EDM_PLUGIN", "0") == "1"
 
-        if top_export and top_export.has_lib:
-            # Standard linkable library
+        if is_implicit_plugin:
+            # <flags EDM_PLUGIN="1"/> with no <library> — build plugin from *.cc
             statements.extend(dep_warnings)
-            flags = _collect_flags(top_flags)
-
             args: list[tuple[str, list[str] | str | None]] = []
-            if flags.get("ADD_SUBDIR") == "1":
+            if internal_deps:
+                args.append(("DEPS", internal_deps))
+            if external_deps:
+                args.append(("EXT_DEPS", external_deps))
+            if top_link_libs:
+                args.append(("LINK_LIBS", top_link_libs))
+            if top_include_paths:
+                args.append(("INCLUDE_DIRS", top_include_paths))
+            statements.extend(_format_c4h_call(
+                "c4h_add_plugin", args,
+                comment="top-level <flags EDM_PLUGIN=\"1\"/> — implicit plugin from *.cc"
+            ))
+        elif top_uses and top_export and top_export.has_lib:
+            # Standard linkable library (top-level <use> + <export><lib name="1"/>)
+            statements.extend(dep_warnings)
+
+            args = []
+            if top_flags_merged.get("ADD_SUBDIR") == "1":
                 args.append(("RECURSE_SOURCES", None))
-            skip = flags.get("SKIP_FILES", "")
+            skip = top_flags_merged.get("SKIP_FILES", "")
             if skip:
                 args.append(("EXCLUDE_SOURCES", skip.split()))
-            dict_header = flags.get("LCG_DICT_HEADER", "")
+            dict_header = top_flags_merged.get("LCG_DICT_HEADER", "")
             if dict_header:
                 args.append(("DICT_HEADER", dict_header))
-            dict_xml = flags.get("LCG_DICT_XML", "")
+            dict_xml = top_flags_merged.get("LCG_DICT_XML", "")
             if dict_xml:
                 args.append(("DICT_XML", dict_xml))
-            if flags.get("NO_LIB_CHECKING") == "1":
+            if top_flags_merged.get("NO_LIB_CHECKING") == "1":
                 args.append(("NO_SYMBOL_CHECK", None))
-            install_scripts = flags.get("INSTALL_SCRIPTS", "")
+            install_scripts = top_flags_merged.get("INSTALL_SCRIPTS", "")
             if install_scripts:
                 args.append(("INSTALL_SCRIPTS", install_scripts.split()))
             if internal_deps:
                 args.append(("DEPS", internal_deps))
             if external_deps:
                 args.append(("EXT_DEPS", external_deps))
+            if top_link_libs:
+                args.append(("LINK_LIBS", top_link_libs))
             if top_include_paths:
                 args.append(("INCLUDE_DIRS", top_include_paths))
 
@@ -884,9 +967,17 @@ def convert(nodes: list[BuildFileNode], ctx: ConvertContext) -> list[str]:
                 "c4h_add_library", args,
                 comment="top-level <use> + <export><lib name=\"1\"/> — standard library package"
             ))
-        else:
-            # Header-only package — no CMake target, but deps are still recorded
-            # in ext_targets_seen for find_package generation in --scan-dir mode.
+        elif top_link_libs and not top_uses:
+            # Only <lib> elements, no <use> — unusual; emit a note.
+            statements.append(
+                "# NOTE: top-level <lib> elements without a target declaration."
+            )
+            statements.append(
+                f"# Raw linker libs: {', '.join(top_link_libs)}. "
+                "Add LINK_LIBS to the appropriate c4h_add_* call."
+            )
+        elif top_uses:
+            # Header-only package — no library target needed.
             statements.append(
                 "# Header-only package: no library target generated."
             )
@@ -894,12 +985,15 @@ def convert(nodes: list[BuildFileNode], ctx: ConvertContext) -> list[str]:
                 "# Add include path to consumers via target_include_directories if needed."
             )
 
-    # Convert remaining (non-use, non-export, non-include_path) nodes
+    # Convert remaining (non-use, non-lib, non-export, non-include_path, non-flags) nodes.
+    # Pass top_uses, top_libs, and top_flags so <library> elements inherit them.
     for node in nodes:
-        if isinstance(node, (UseNode, ExportNode, IncludePathNode, FlagsNode)):
+        if isinstance(node, (UseNode, LibNode, ExportNode, IncludePathNode, FlagsNode)):
             continue  # already handled above
 
-        stmts = _convert_node(node, ctx, top_include_paths)
+        stmts = _convert_node(node, ctx, top_include_paths,
+                              top_uses=top_uses, top_libs=top_libs,
+                              top_flags=top_flags)
         if stmts:
             statements.append("")  # blank line between calls
             statements.extend(stmts)
@@ -1003,8 +1097,12 @@ def scan_directory(
 
     scan_root_resolved = scan_root.resolve()
 
+    # Resolve all buildfile paths upfront so every path comparison works
+    # whether scan_root was given as relative or absolute.
+    buildfiles = [bf.resolve() for bf in buildfiles]
+
     # Set of resolved directories that own a BuildFile.xml
-    package_dirs: set[pathlib.Path] = {bf.parent.resolve() for bf in buildfiles}
+    package_dirs: set[pathlib.Path] = {bf.parent for bf in buildfiles}
 
     # --- Collect all ancestor directories between scan_root and each package,
     #     that do NOT own a BuildFile.xml themselves. These need structural files.
@@ -1023,10 +1121,13 @@ def scan_directory(
                 break
             current = current.parent
 
-    # --- For each package dir, check whether any direct child directory also
-    #     owns a BuildFile.xml (e.g. DataFormats/plugins/).
-    def _direct_package_children(d: pathlib.Path) -> list[pathlib.Path]:
-        return sorted(p for p in package_dirs if p.parent.resolve() == d.resolve())
+    # All directories that will receive a CMakeLists.txt after this scan —
+    # used to decide which package dirs need c4h_auto_subdirectories().
+    all_cmake_dirs: set[pathlib.Path] = package_dirs | structural_dirs
+
+    def _has_cmake_child(d: pathlib.Path) -> bool:
+        """Return True if any direct child directory of d will have a CMakeLists.txt."""
+        return any(p.parent == d for p in all_cmake_dirs if p != d)
 
     # --- Convert each BuildFile.xml ---
     any_errors = False
@@ -1035,7 +1136,7 @@ def scan_directory(
         nodes = parse_buildfile(str(bf))
         statements = convert(nodes, ctx)
 
-        if _direct_package_children(bf.parent):
+        if _has_cmake_child(bf.parent):
             statements.append("")
             statements.append(
                 "# Subdirectories with their own CMakeLists.txt are picked up automatically."
@@ -1111,8 +1212,7 @@ def main() -> None:
         formatter_class=ArgumentDefaultsRawHelpFormatter,
         epilog="""
 Scan-dir mode (--scan-dir DIR):
-  Converts every BuildFile.xml found recursively under absolute path DIR.
-  Additionally:
+  Converts every BuildFile.xml found recursively under DIR. Additionally:
     - Generates mid-level structural CMakeLists.txt files for directories that
       have package children but no BuildFile.xml of their own (including the
       scan-root directory itself). Each calls c4h_auto_subdirectories(), which
@@ -1147,7 +1247,7 @@ Exit codes:
         default=None,
         metavar="BUILDFILE",
         help=(
-            "Absolute path to BuildFile.xml (default: ./BuildFile.xml). "
+            "Path to BuildFile.xml (default: ./BuildFile.xml). "
             "Mutually exclusive with --scan-dir."
         ),
     )
@@ -1155,7 +1255,7 @@ Exit codes:
         "--scan-dir",
         metavar="DIR",
         help=(
-            "Convert all BuildFile.xml files found recursively under absolute path DIR and "
+            "Convert all BuildFile.xml files found recursively under DIR and "
             "generate structural CMakeLists.txt files. Mutually exclusive with BUILDFILE."
         ),
     )
@@ -1201,17 +1301,17 @@ Exit codes:
     # Build target map (shared by both modes)
     target_map = dict(SCRAM_TO_CMAKE_TARGETS)
     if args.map:
-        overrides = load_map_file(args.map)
+        overrides = load_map_file(str(pathlib.Path(args.map).resolve()))
         target_map.update({k.lower(): v for k, v in overrides.items()})
 
     # -----------------------------------------------------------------------
     # Scan-dir mode
     # -----------------------------------------------------------------------
     if args.scan_dir:
-        scan_root = pathlib.Path(args.scan_dir)
+        scan_root = pathlib.Path(args.scan_dir).resolve()
         if not scan_root.is_dir():
             print(
-                f"ERROR: --scan-dir '{scan_root}' is not a directory.",
+                f"ERROR: --scan-dir '{args.scan_dir}' is not a directory.",
                 file=sys.stderr,
             )
             sys.exit(2)
@@ -1229,17 +1329,17 @@ Exit codes:
     # Single-file mode
     # -----------------------------------------------------------------------
     buildfile_str = args.buildfile if args.buildfile else "BuildFile.xml"
-    buildfile_path = pathlib.Path(buildfile_str)
+    buildfile_path = pathlib.Path(buildfile_str).resolve()
     if not buildfile_path.exists():
         print(
-            f"ERROR: BuildFile.xml not found at '{buildfile_path}'.",
+            f"ERROR: BuildFile.xml not found at '{buildfile_str}'.",
             file=sys.stderr,
         )
         sys.exit(2)
 
     # Resolve output path
     if args.output:
-        output_path = None if args.output == "-" else pathlib.Path(args.output)
+        output_path = None if args.output == "-" else pathlib.Path(args.output).resolve()
     else:
         output_path = buildfile_path.parent / "CMakeLists.txt"
 
@@ -1262,6 +1362,26 @@ Exit codes:
         target_map=target_map,
     )
     statements = convert(nodes, ctx)
+
+    # Append c4h_auto_subdirectories() if any direct child directory has either
+    # a BuildFile.xml (will be converted separately) or already has a CMakeLists.txt
+    # (hand-written or previously converted). This mirrors what --scan-dir does
+    # automatically across the whole tree.
+    pkg_dir = buildfile_path.parent
+    has_cmake_child = any(
+        child.is_dir() and (
+            (child / "BuildFile.xml").exists()
+            or (child / "CMakeLists.txt").exists()
+        )
+        for child in pkg_dir.iterdir()
+    )
+    if has_cmake_child:
+        statements.append("")
+        statements.append(
+            "# Subdirectories with their own CMakeLists.txt are picked up automatically."
+        )
+        statements.append("c4h_auto_subdirectories()")
+
     output_text = render(statements, str(buildfile_path))
 
     if output_path is None:
