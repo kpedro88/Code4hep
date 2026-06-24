@@ -1,10 +1,10 @@
-# Code4HepBuildFunctions.cmake
-# CMake helper-function library for the CODE4hep HEP software framework.
+# Code4hepBuildFunctions.cmake
+# CMake helper-function library for the Code4hep HEP software framework.
 # Provides high-level wrappers around raw CMake boilerplate and the Stitched
 # upstream helper functions (StitchedMacros.cmake).
 #
 # Downstream packages get these functions automatically via:
-#   find_package(code4hep REQUIRED)
+#   find_package(Code4hep REQUIRED)
 #
 # CMake minimum version: 3.23 (required for FILE_SET HEADERS).
 
@@ -19,9 +19,9 @@ cmake_minimum_required(VERSION 3.23)
 #   3. Replace remaining '/' with '_'.
 #
 # Examples:
-#   code4hep/DataFormats       -> DataFormats
-#   code4hep/PodioUtilities    -> PodioUtilities
-#   stitched/FWCore/Common     -> FWCore_Common
+#   Code4hep/DataFormats       -> DataFormats
+#   Code4hep/PodioUtilities    -> PodioUtilities
+#   Stitched/FWCore/Common     -> FWCore_Common
 # ---------------------------------------------------------------------------
 function(_c4h_derive_target_name OUT_VAR OUT_PATH_VAR)
     file(RELATIVE_PATH _rel "${CMAKE_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -37,7 +37,7 @@ endfunction()
 # ---------------------------------------------------------------------------
 # c4h_register_upstream(project_name)
 # Appends project_name to the global CMake property C4H_UPSTREAM_PROJECTS.
-# Called automatically by code4hepConfig.cmake for stitched; call it
+# Called automatically by Code4hepConfig.cmake for Stitched; call it
 # explicitly in the top-level CMakeLists.txt for additional upstreams.
 # ---------------------------------------------------------------------------
 function(c4h_register_upstream project_name)
@@ -199,7 +199,7 @@ endfunction()
 # in its .cc files and should not propagate it to consumers.
 #
 # Per-target compile flag overrides (USER_CXXFLAGS in SCRAM) are intentionally
-# absent from Code4HepBuild functions. The correct CMake equivalents are:
+# absent from Code4hepBuild functions. The correct CMake equivalents are:
 #   - Debug symbols + no optimization (equivalent to USER_CXXFLAGS="-g -O0"):
 #     configure with cmake -DCMAKE_BUILD_TYPE=Debug.
 #   - Debug symbols alongside a release build:
@@ -878,7 +878,7 @@ function(c4h_add_format_target)
     if(CLANG_FORMAT_EXECUTABLE)
         add_custom_target(format
             COMMAND "${CLANG_FORMAT_EXECUTABLE}" -i ${_all_sources}
-            COMMENT "Running clang-format over all Code4HEP sources"
+            COMMENT "Running clang-format over all Code4hep sources"
         )
     else()
         message(STATUS "c4h: clang-format not found; 'format' target disabled.")

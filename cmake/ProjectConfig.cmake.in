@@ -1,6 +1,6 @@
 # ProjectConfig.cmake.in
 # Generic per-repo CMake package config template for experiment-specific repos
-# that build on top of code4hep. Copy this file to cmake/ and rename it to
+# that build on top of Code4hep. Copy this file to cmake/ and rename it to
 # match your project name (e.g., myExperimentConfig.cmake.in). Then configure
 # your top-level CMakeLists.txt to install it via configure_package_config_file().
 #
@@ -9,16 +9,16 @@
 #
 # After find_package:
 #   - All targets installed by this project are available as @PROJECT_NAME@::<target>.
-#   - code4hep is loaded transitively, giving access to all c4h_* functions and
-#     both code4hep:: and stitched:: target namespaces.
+#   - Code4hep is loaded transitively, giving access to all c4h_* functions and
+#     both Code4hep:: and Stitched:: target namespaces.
 
 @PACKAGE_INIT@
 
 include(CMakeFindDependencyMacro)
 
-# Load code4hep transitively — this also pulls in stitched and registers both
+# Load Code4hep transitively — this also pulls in Stitched and registers both
 # as known upstreams for DEPS shorthand resolution.
-find_dependency(code4hep REQUIRED)
+find_dependency(Code4hep REQUIRED)
 
 # Load this project's installed targets.
 include("${CMAKE_CURRENT_LIST_DIR}/@PROJECT_NAME@Targets.cmake")
