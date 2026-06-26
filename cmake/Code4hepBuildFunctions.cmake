@@ -413,6 +413,11 @@ endfunction()
 # Because all user-defined plugin factories subclass the base PluginFactory
 # class, edmWriteConfigs works uniformly for all plugin types.
 #
+# NAME is optional. When omitted, the target name is derived from the
+# directory path using the same algorithm as c4h_add_library (e.g.
+# code4hep/TestModules/plugins → plugin_TestModules_plugins).
+# Supply NAME only when you need to override the auto-derived name.
+#
 # Per-target compile flag overrides are intentionally absent. See the note
 # in c4h_add_library for the correct CMAKE_BUILD_TYPE-based equivalents.
 # ---------------------------------------------------------------------------
@@ -425,14 +430,14 @@ function(c4h_add_plugin)
         ${ARGN}
     )
 
-    if(NOT C4H_PLG_NAME)
-        message(FATAL_ERROR "c4h_add_plugin: NAME is required.")
-    endif()
-
-    set(_target "plugin_${C4H_PLG_NAME}")
-
-    # --- Derive package path (for C4H_PACKAGE_PATH property) ---
+    # --- Derive target name (same algorithm as c4h_add_library) ---
     _c4h_derive_target_name(_auto_target _pkg_path)
+    if(C4H_PLG_NAME)
+        set(_plugin_name "${C4H_PLG_NAME}")
+    else()
+        set(_plugin_name "${_auto_target}")
+    endif()
+    set(_target "plugin_${_plugin_name}")
 
     # --- Source globbing ---
     if(C4H_PLG_SOURCES)
