@@ -17,6 +17,10 @@ include(CMakePackageConfigHelpers)
 # Downstream repos get these via find_package(Code4hep REQUIRED).
 include("${CMAKE_SOURCE_DIR}/cmake/Code4hepBuildFunctions.cmake")
 
+# Register Code4hep itself so that DEPS like Code4hep/PodioUtilities resolve
+# correctly: in-tree to bare PodioUtilities, installed to Code4hep::PodioUtilities.
+c4h_register_upstream(Code4hep)
+
 # Stitched is the mandatory upstream framework.
 # Its targets (Stitched::FWCore_*, etc.) are needed for DEPS shorthand resolution.
 find_package(Stitched REQUIRED)

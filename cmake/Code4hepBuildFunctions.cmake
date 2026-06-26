@@ -151,20 +151,47 @@ function(_c4h_resolve_dep DEP OUT_VAR)
 
     if("${DEP}" MATCHES "/")
         string(REPLACE "/" "_" _bare "${DEP}")
+        # Split at the first '/' to distinguish two dep styles:
+        #   FWCore/Utilities  — FWCore is a subsystem inside stitched; full path is the target suffix
+        #   Code4hep/PodioUtilities — Code4hep IS the project; remainder is the direct target name
+        string(REGEX MATCH "^([^/]+)/(.+)$" _c4h_slash_match "${DEP}")
+        set(_first_component "${CMAKE_MATCH_1}")
+        set(_rest_path       "${CMAKE_MATCH_2}")
+        string(REPLACE "/" "_" _rest_bare "${_rest_path}")
+
         get_property(_upstreams GLOBAL PROPERTY C4H_UPSTREAM_PROJECTS)
         foreach(_up IN LISTS _upstreams)
-            # Try the simple form first: Upstream::Bare_Name
+            string(TOLOWER "${_up}"              _up_lower)
+            string(TOLOWER "${_first_component}" _first_lower)
+
+            # Style A: subsystem-qualified — Upstream::First_Rest or Upstream::upstream_First_Rest
+            # (e.g. FWCore/Utilities → Stitched::stitched_FWCore_Utilities)
             if(TARGET "${_up}::${_bare}")
                 set(${OUT_VAR} "${_up}::${_bare}" PARENT_SCOPE)
                 return()
             endif()
-            # Also try the prefixed form: Upstream::lowercase_Bare_Name
-            # (e.g. Stitched::stitched_FWCore_Utilities)
             string(TOLOWER "${_up}" _up_lower)
             if(TARGET "${_up}::${_up_lower}_${_bare}")
                 set(${OUT_VAR} "${_up}::${_up_lower}_${_bare}" PARENT_SCOPE)
                 return()
             endif()
+
+            # Style B: project-qualified — first component IS the upstream project name.
+            # (e.g. Code4hep/PodioUtilities with upstream code4hep)
+            # Installed package exposes code4hep::PodioUtilities;
+            # in-tree build exposes bare PodioUtilities.
+            if("${_first_lower}" STREQUAL "${_up_lower}")
+                if(TARGET "${_up}::${_rest_bare}")
+                    # Installed: namespace-qualified target exists.
+                    set(${OUT_VAR} "${_up}::${_rest_bare}" PARENT_SCOPE)
+                    return()
+                else()
+                    # In-tree: accept bare name unconditionally; generator catches typos.
+                    set(${OUT_VAR} "${_rest_bare}" PARENT_SCOPE)
+                    return()
+                endif()
+            endif()
+
         endforeach()
         message(FATAL_ERROR
             "c4h: Cannot resolve dependency '${DEP}' (looked for "

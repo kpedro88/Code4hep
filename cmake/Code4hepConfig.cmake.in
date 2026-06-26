@@ -4,9 +4,8 @@
 #
 # After find_package(Code4hep REQUIRED):
 #   - Code4hepBuildFunctions.cmake is loaded (all c4h_* functions available).
-#   - Stitched is found and c4h_register_upstream(Stitched) is called, so
-#     FWCore/... DEPS shorthand resolves automatically without any explicit
-#     upstream registration in downstream CMakeLists.txt files.
+#   - Stitched and Code4hep are registered as known upstreams, so both
+#     FWCore/... and Code4hep/... DEPS shorthands resolve automatically.
 
 @PACKAGE_INIT@
 
@@ -21,10 +20,10 @@ include("${CMAKE_CURRENT_LIST_DIR}/Code4hepBuildFunctions.cmake")
 # Load the installed Code4hep targets (libraries, executables).
 include("${CMAKE_CURRENT_LIST_DIR}/Code4hepTargets.cmake")
 
-# Register Stitched as a known upstream for DEPS shorthand resolution
-# (e.g. FWCore/Common -> Stitched::FWCore_Common).
-# Any downstream repo that does find_package(Code4hep REQUIRED) gets this
-# resolution automatically.
+# Register upstreams for DEPS shorthand resolution:
+#   FWCore/Utilities  -> stitched::stitched_FWCore_Utilities  (or Stitched::FWCore_Utilities)
+#   Code4hep/PodioUtilities -> code4hep::PodioUtilities  (installed)
 c4h_register_upstream(Stitched)
+c4h_register_upstream(Code4hep)
 
 check_required_components(Code4hep)
