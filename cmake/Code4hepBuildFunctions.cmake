@@ -126,6 +126,13 @@ function(_c4h_auto_find_package namespace)
     if(NOT _pkg_name)
         set(_pkg_name "${namespace}")
     endif()
+    # Guard: call find_package at most once per resolved package name.
+    # CMake's own idempotency is unreliable for module-mode packages.
+    get_property(_already GLOBAL PROPERTY "C4H_EXT_FOUND_${_pkg_name}")
+    if(_already)
+        return()
+    endif()
+    set_property(GLOBAL PROPERTY "C4H_EXT_FOUND_${_pkg_name}" TRUE)
     get_property(_extra GLOBAL PROPERTY "C4H_EXT_ARGS_${namespace}")
     find_package(${_pkg_name} REQUIRED ${_extra})
     message(STATUS "[C4H] ran find_package for ${_pkg_name}")
