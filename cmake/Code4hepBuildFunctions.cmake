@@ -77,6 +77,8 @@ if(NOT _c4h_ext_init)
     foreach(_ns IN ITEMS podio EDM4HEP cmsswdata nlohmann_json HepMC3)
         set_property(GLOBAL PROPERTY "C4H_EXT_ARGS_${_ns}" "CONFIG")
     endforeach()
+    # Packages that require specific components
+    set_property(GLOBAL PROPERTY C4H_EXT_ARGS_Python3 "COMPONENTS Development Interpreter")
 endif()
 
 # ---------------------------------------------------------------------------
@@ -127,6 +129,8 @@ function(_c4h_auto_find_package namespace)
     get_property(_extra GLOBAL PROPERTY "C4H_EXT_ARGS_${namespace}")
     find_package(${_pkg_name} REQUIRED ${_extra})
     message(STATUS "[C4H] ran find_package for ${_pkg_name}")
+    get_property(found_targets DIRECTORY PROPERTY IMPORTED_TARGETS)
+    message(STATUS "[C4H] All available imported targets: ${found_targets}")
 endfunction()
 
 # ---------------------------------------------------------------------------
