@@ -134,7 +134,23 @@ function(_c4h_auto_find_package namespace)
     endif()
     set_property(GLOBAL PROPERTY "C4H_EXT_FOUND_${_pkg_name}" TRUE)
     get_property(_extra GLOBAL PROPERTY "C4H_EXT_ARGS_${namespace}")
+
+    # Snapshot imported targets visible in this directory before the call so
+    # we can promote newly-created ones to GLOBAL scope.  Without this,
+    # imported targets created here are only visible in this directory and its
+    # descendants; sibling directories would fail to find them even though the
+    # guard correctly prevents a second find_package call.
+    get_property(_before DIRECTORY PROPERTY IMPORTED_TARGETS)
     find_package(${_pkg_name} REQUIRED ${_extra})
+    get_property(_after DIRECTORY PROPERTY IMPORTED_TARGETS)
+    foreach(_tgt IN LISTS _after)
+        if(NOT "${_tgt}" IN_LIST _before)
+            if(TARGET "${_tgt}")
+                set_target_properties("${_tgt}" PROPERTIES IMPORTED_GLOBAL TRUE)
+            endif()
+        endif()
+    endforeach()
+
     message(STATUS "[C4H] ran find_package for ${_pkg_name}")
     get_property(found_targets DIRECTORY PROPERTY IMPORTED_TARGETS)
     message(STATUS "[C4H] All available imported targets: ${found_targets}")
