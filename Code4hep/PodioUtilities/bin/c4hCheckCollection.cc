@@ -1,4 +1,4 @@
-#include "Code4hep/PodioUtilities/interface/CollectionWrapperConverterBaseFactory.h"
+#include "Code4hep/PodioUtilities/CollectionWrapperConverterBaseFactory.h"
 #include "FWCore/PluginManager/interface/PluginManager.h"
 #include "FWCore/PluginManager/interface/standard.h"
 #include <boost/program_options.hpp>

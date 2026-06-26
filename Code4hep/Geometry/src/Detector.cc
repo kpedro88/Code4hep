@@ -1,4 +1,4 @@
-#include "Code4hep/Geometry/interface/Detector.h"
+#include "Code4hep/Geometry/Detector.h"
 #include <DD4hep/DetectorTools.h>
 #include <DD4hep/Printout.h>
 

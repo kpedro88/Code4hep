@@ -4,8 +4,8 @@
 #include "FWCore/Framework/interface/ESTransientHandle.h"
 #include "FWCore/Framework/interface/EventSetup.h"
 #include "FWCore/MessageLogger/interface/MessageLogger.h"
-#include "Code4hep/Geometry/interface/Detector.h"
-#include "Code4hep/GeometryRecords/interface/GeometryRecord.h"
+#include "Code4hep/Geometry/Detector.h"
+#include "Code4hep/GeometryRecords/GeometryRecord.h"
 #include "DD4hep/Detector.h"
 
 class DetectorAnalyzer : public edm::one::EDAnalyzer<> {

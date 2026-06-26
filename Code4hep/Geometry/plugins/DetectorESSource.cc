@@ -9,8 +9,8 @@
 #include "FWCore/Concurrency/interface/SharedResourceNames.h"
 #include "FWCore/MessageLogger/interface/MessageLogger.h"
 
-#include "Code4hep/GeometryRecords/interface/GeometryRecord.h"
-#include "Code4hep/Geometry/interface/Detector.h"
+#include "Code4hep/GeometryRecords/GeometryRecord.h"
+#include "Code4hep/Geometry/Detector.h"
 
 class DetectorESSource : public edm::ESProducer, public edm::EventSetupRecordIntervalFinder {
 public:

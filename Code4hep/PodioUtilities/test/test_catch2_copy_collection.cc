@@ -3,7 +3,7 @@
 #include "edm4hep/TrackData.h"
 #include <unordered_map>
 
-#include "Code4hep/PodioUtilities/interface/CollectionWrapperConverter.h"
+#include "Code4hep/PodioUtilities/CollectionWrapperConverter.h"
 
 C4H_CONTAINED_CLASS(edm4hep::TrackCollection, std::int32_t);
 C4H_CONTAINED_CLASS(edm4hep::TrackCollection, edm4hep::TrackState);

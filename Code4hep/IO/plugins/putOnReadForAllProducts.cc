@@ -5,7 +5,7 @@
 
 #include "podio/CollectionBase.h"
 
-#include "Code4hep/PodioUtilities/interface/CollectionWrapperConverterBaseFactory.h"
+#include "Code4hep/PodioUtilities/CollectionWrapperConverterBaseFactory.h"
 #include "DataFormats/Common/interface/WrapperBase.h"
 #include "DataFormats/Provenance/interface/ProductDescription.h"
 #include "DataFormats/Provenance/interface/ProductProvenance.h"

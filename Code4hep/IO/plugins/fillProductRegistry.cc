@@ -6,7 +6,7 @@
 
 #include "fillProductRegistry.h"
 
-#include "Code4hep/PodioUtilities/interface/CollectionWrapperConverterBaseFactory.h"
+#include "Code4hep/PodioUtilities/CollectionWrapperConverterBaseFactory.h"
 #include "DataFormats/Provenance/interface/ProductDescription.h"
 #include "FWCore/Utilities/interface/BranchType.h"
 #include "FWCore/Utilities/interface/Exception.h"

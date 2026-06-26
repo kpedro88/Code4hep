@@ -14,7 +14,7 @@ For each podio based collection which needs to be made available in the framewor
 * in the `plugins` directory add a BuildFile.xml file that declares that a plugin needs to be built
 
 ### declaring types
-A series of helper macros can be found in `Code4hep/PodioUtilities/interface/CollectionMacros.h`
+A series of helper macros can be found in `Code4hep/PodioUtilities/CollectionMacros.h`
 
 #### C4H_COLLECTION macro
 This macro creates a plugin specifically for the podio collection. The macro takes one argument which is the
@@ -32,7 +32,7 @@ collection was and what the missing type's name is.
 
 #### example file
 ```C++
-#include "Code4hep/PodioUtilities/interface/CollectionMacros.h"
+#include "Code4hep/PodioUtilities/CollectionMacros.h"
 #include "edm4hep/TrackCollection.h"
 #include "edm4hep/TrackData.h"
 
@@ -75,7 +75,7 @@ You can use the program `c4hCheckCollection` to check that a collection has been
 
 To get access to the plugin, one must use the appropriate plugin factory: `CollectionWrapperConverterBaseFactory`.
 ```C++
-#include "Code4hep/PodioUtilities/interface/CollectionWrapperConverterBaseFactory.h"
+#include "Code4hep/PodioUtilities/CollectionWrapperConverterBaseFactory.h"
 ...
 
   auto factory = CollectionWrapperConverterBaseFactory::get();
@@ -83,4 +83,4 @@ To get access to the plugin, one must use the appropriate plugin factory: `Colle
   auto converter = factory->create("podio::TrackCollection");
 ```
 
-For the available abilities of the returned `CollectionWrapperConverterBase` object see the header file `Code4hep/PodioUtilities/interface/CollectionWrapperConverterBase.h`.
+For the available abilities of the returned `CollectionWrapperConverterBase` object see the header file `Code4hep/PodioUtilities/CollectionWrapperConverterBase.h`.

@@ -1,4 +1,4 @@
-#include "Code4hep/PodioUtilities/interface/CollectionMacros.h"
+#include "Code4hep/PodioUtilities/CollectionMacros.h"
 
 #include "edm4hep/edm4hep.h"
 #include "podio/UserDataCollection.h"

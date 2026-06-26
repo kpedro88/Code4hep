@@ -1,4 +1,4 @@
-#include "Code4hep/PodioUtilities/interface/CollectionWrapperConverterBase.h"
+#include "Code4hep/PodioUtilities/CollectionWrapperConverterBase.h"
 #include "FWCore/Utilities/interface/Exception.h"
 #include "podio/CollectionBufferFactory.h"
 #include "podio/CollectionBase.h"

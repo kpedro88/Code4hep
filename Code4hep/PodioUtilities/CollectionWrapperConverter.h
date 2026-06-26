@@ -7,7 +7,7 @@
 #include <algorithm>
 #include <unordered_map>
 
-#include "Code4hep/PodioUtilities/interface/CollectionWrapperConverterBase.h"
+#include "Code4hep/PodioUtilities/CollectionWrapperConverterBase.h"
 #include "DataFormats/Common/interface/Wrapper.h"
 #include "FWCore/Utilities/interface/concatenate.h"
 

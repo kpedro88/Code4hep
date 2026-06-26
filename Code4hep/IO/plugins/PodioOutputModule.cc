@@ -3,7 +3,7 @@
 #include "podio/CollectionBase.h"
 #include "edm4hep/edm4hep.h"
 
-#include "Code4hep/PodioUtilities/interface/CollectionWrapperConverterBaseFactory.h"
+#include "Code4hep/PodioUtilities/CollectionWrapperConverterBaseFactory.h"
 #include "FWCore/Framework/interface/one/OutputModule.h"
 #include "FWCore/Framework/interface/MakerMacros.h"
 #include "FWCore/Framework/interface/EventForOutput.h"
