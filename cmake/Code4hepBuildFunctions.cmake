@@ -126,6 +126,7 @@ function(_c4h_auto_find_package namespace)
     endif()
     get_property(_extra GLOBAL PROPERTY "C4H_EXT_ARGS_${namespace}")
     find_package(${_pkg_name} REQUIRED ${_extra})
+    message(STATUS "[C4H] ran find_package for ${_pkg_name}")
 endfunction()
 
 # ---------------------------------------------------------------------------
@@ -144,6 +145,7 @@ function(_c4h_resolve_dep DEP OUT_VAR)
         # Already fully-qualified CMake target.
         # Extract namespace and ensure the providing package is found.
         string(REGEX MATCH "^[^:]+" _ns "${DEP}")
+        message(STATUS "[C4H] trying to resolve dep ${_ns}")
         _c4h_auto_find_package("${_ns}")
         set(${OUT_VAR} "${DEP}" PARENT_SCOPE)
         return()
@@ -211,6 +213,7 @@ endfunction()
 # Sets OUT_VAR in caller scope to the resolved target list.
 # ---------------------------------------------------------------------------
 function(_c4h_resolve_deps DEPS_LIST OUT_VAR)
+    message(STATUS "[C4H] resolve deps: ${DEPS_LIST}")
     set(_resolved)
     foreach(_dep IN LISTS DEPS_LIST)
         _c4h_resolve_dep("${_dep}" _r)
@@ -323,17 +326,22 @@ function(c4h_add_library)
     endif()
 
     # --- Dependency resolution and linking ---
-    _c4h_resolve_deps("${C4H_LIB_DEPS}" _pub_deps)
+    # EXT_DEPS are fully-qualified CMake targets (e.g. ROOT::Core, podio::podio).
+    # Passing them through _c4h_resolve_deps triggers _c4h_auto_find_package() for
+    # each namespace — the targets themselves pass through unchanged.
+    _c4h_resolve_deps("${C4H_LIB_DEPS}"         _pub_deps)
+    _c4h_resolve_deps("${C4H_LIB_EXT_DEPS}"     _ext_pub_deps)
     _c4h_resolve_deps("${C4H_LIB_PRIVATE_DEPS}" _priv_deps)
+    _c4h_resolve_deps("${C4H_LIB_EXT_PRIVATE_DEPS}" _ext_priv_deps)
 
-    if(_pub_deps OR C4H_LIB_EXT_DEPS)
+    if(_pub_deps OR _ext_pub_deps)
         target_link_libraries(${_C4H_TARGET}
-            PUBLIC ${_pub_deps} ${C4H_LIB_EXT_DEPS}
+            PUBLIC ${_pub_deps} ${_ext_pub_deps}
         )
     endif()
-    if(_priv_deps OR C4H_LIB_EXT_PRIVATE_DEPS)
+    if(_priv_deps OR _ext_priv_deps)
         target_link_libraries(${_C4H_TARGET}
-            PRIVATE ${_priv_deps} ${C4H_LIB_EXT_PRIVATE_DEPS}
+            PRIVATE ${_priv_deps} ${_ext_priv_deps}
         )
     endif()
 
@@ -462,9 +470,10 @@ function(c4h_add_plugin)
         endforeach()
     endif()
 
-    # --- Resolve deps ---
-    _c4h_resolve_deps("${C4H_PLG_DEPS}" _resolved_deps)
-    set(_link_libs ${_resolved_deps} ${C4H_PLG_EXT_DEPS})
+    # --- Resolve deps (EXT_DEPS pass through unchanged but trigger find_package) ---
+    _c4h_resolve_deps("${C4H_PLG_DEPS}"     _resolved_deps)
+	_c4h_resolve_deps("${C4H_PLG_EXT_DEPS}" _resolved_ext_deps)
+	set(_all_link_libs ${_resolved_deps} ${_resolved_ext_deps})
 
     # --- Create plugin target ---
     if(C4H_PLG_NO_CFIPYTHON)
@@ -561,8 +570,9 @@ function(c4h_add_executable)
         target_include_directories(${_target} PRIVATE ${C4H_EXE_INCLUDE_DIRS})
     endif()
 
-    _c4h_resolve_deps("${C4H_EXE_DEPS}" _resolved_deps)
-    set(_link_libs ${_resolved_deps} ${C4H_EXE_EXT_DEPS})
+    _c4h_resolve_deps("${C4H_EXE_DEPS}"     _resolved_deps)
+    _c4h_resolve_deps("${C4H_EXE_EXT_DEPS}" _resolved_ext_deps)
+    set(_link_libs ${_resolved_deps} ${_resolved_ext_deps})
     if(_link_libs)
         target_link_libraries(${_target} PRIVATE ${_link_libs})
     endif()
@@ -636,7 +646,7 @@ function(c4h_add_test)
         C4H_TST
         ""
         "NAME;WORKING_DIRECTORY"
-        "COMMAND;DEPS;EXT_DEPS;ENVIRONMENT;DEPENDS"
+        "COMMAND;DEPS;ENVIRONMENT;DEPENDS"
         ${ARGN}
     )
 
@@ -755,8 +765,9 @@ function(c4h_add_test_binary)
     # Exclude from default install target
     set_target_properties(${_target} PROPERTIES EXCLUDE_FROM_ALL TRUE)
 
-    _c4h_resolve_deps("${C4H_TB_DEPS}" _resolved_deps)
-    set(_link_libs ${_resolved_deps} ${C4H_TB_EXT_DEPS})
+    _c4h_resolve_deps("${C4H_TB_DEPS}"     _resolved_deps)
+    _c4h_resolve_deps("${C4H_TB_EXT_DEPS}" _resolved_ext_deps)
+    set(_link_libs ${_resolved_deps} ${_resolved_ext_deps})
     if(_link_libs)
         target_link_libraries(${_target} PRIVATE ${_link_libs})
     endif()

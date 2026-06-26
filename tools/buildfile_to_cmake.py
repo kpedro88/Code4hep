@@ -782,9 +782,15 @@ def _convert_bin(node: BinNode, ctx: ConvertContext,
 
 
 def _convert_test(node: TestNode, ctx: ConvertContext) -> list[str]:
-    """Convert a <test> element."""
+    """Convert a <test> element.
+
+    c4h_add_test creates no build target — it only runs a command via CTest.
+    DEPS feeds LD_LIBRARY_PATH so in-tree libraries are found at runtime.
+    External deps (EXT_DEPS) and raw linker libs (LINK_LIBS) are not accepted
+    by c4h_add_test and are dropped here; system-installed libraries are
+    already on the runtime library path via the environment.
+    """
     internal_deps, external_deps, dep_warnings = _uses_to_deps(node.uses, ctx, node.line)
-    link_libs = [ln.name for ln in node.libs if ln.name]
     flags = _collect_flags(node.flags)
 
     cmd = node.command
@@ -815,10 +821,8 @@ def _convert_test(node: TestNode, ctx: ConvertContext) -> list[str]:
     ]
     if internal_deps:
         args.append(("DEPS", internal_deps))
-    if external_deps:
-        args.append(("EXT_DEPS", external_deps))
-    if link_libs:
-        args.append(("LINK_LIBS", link_libs))
+    # External deps and raw linker libs are intentionally omitted: c4h_add_test
+    # does not link anything, and system libraries are on the runtime path already.
     if env_pairs:
         args.append(("ENVIRONMENT", env_pairs))
     if depends:
