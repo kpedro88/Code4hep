@@ -115,6 +115,67 @@ function(c4h_register_ext_package)
     endif()
 endfunction()
 
+# Internal: promote a list of imported targets to GLOBAL scope and backfill
+# their INTERFACE_INCLUDE_DIRECTORIES from old-style <pkg>_INCLUDE_DIRS /
+# <pkg>_INCLUDE_DIR variables when the property is absent.
+#
+# Some upstream CMake configs (notably Stitched per-module targets) link
+# correctly but omit INTERFACE_INCLUDE_DIRECTORIES, so consumers never get
+# the necessary -I flags even though the .so links fine.  Reading the
+# old-style variable (always populated by FindXxx.cmake and most config
+# files) and setting it on the target restores transitive header propagation
+# without any surgery on the upstream packages.
+#
+# Call with the package name and the list of NEW target names (i.e. those
+# discovered after the find_package call).
+# ---------------------------------------------------------------------------
+function(_c4h_promote_and_backfill pkg_name new_targets)
+    foreach(_tgt IN LISTS new_targets)
+        if(NOT TARGET "${_tgt}")
+            continue()
+        endif()
+        set_target_properties("${_tgt}" PROPERTIES IMPORTED_GLOBAL TRUE)
+        get_target_property(_iid "${_tgt}" INTERFACE_INCLUDE_DIRECTORIES)
+        if(NOT _iid)
+            # Try the two conventional variable names in order.
+            foreach(_var IN ITEMS
+                    "${pkg_name}_INCLUDE_DIRS"
+                    "${pkg_name}_INCLUDE_DIR")
+                if(${_var})
+                    set_target_properties("${_tgt}"
+                        PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${${_var}}")
+                    break()
+                endif()
+            endforeach()
+        endif()
+    endforeach()
+endfunction()
+
+# ---------------------------------------------------------------------------
+# c4h_backfill_ext_includes(PACKAGE <name> [TARGETS <tgt>...])
+#
+# Public helper for packages found BEFORE the c4h machinery loads (e.g.
+# stitched in the top-level CMakeLists.txt).  Call it right after
+# find_package() to ensure all imported targets from that package have
+# INTERFACE_INCLUDE_DIRECTORIES populated and are promoted to GLOBAL scope.
+#
+# If TARGETS is omitted, all currently-known IMPORTED_TARGETS in the calling
+# directory are promoted/backfilled — useful as a blanket fix immediately
+# after a top-level find_package.
+# ---------------------------------------------------------------------------
+function(c4h_backfill_ext_includes)
+    cmake_parse_arguments(_BF "" "PACKAGE" "TARGETS" ${ARGN})
+    if(NOT _BF_PACKAGE)
+        message(FATAL_ERROR "c4h_backfill_ext_includes: PACKAGE is required.")
+    endif()
+    if(_BF_TARGETS)
+        set(_tgts "${_BF_TARGETS}")
+    else()
+        get_property(_tgts DIRECTORY PROPERTY IMPORTED_TARGETS)
+    endif()
+    _c4h_promote_and_backfill("${_BF_PACKAGE}" "${_tgts}")
+endfunction()
+
 # ---------------------------------------------------------------------------
 # Internal: call find_package() for the package that provides <namespace>::
 # targets, using the override properties if present, defaulting to
@@ -136,19 +197,17 @@ function(_c4h_auto_find_package namespace)
     get_property(_extra GLOBAL PROPERTY "C4H_EXT_ARGS_${namespace}")
 
     # Snapshot imported targets visible in this directory before the call so
-    # we can promote newly-created ones to GLOBAL scope.  Without this,
-    # imported targets created here are only visible in this directory and its
-    # descendants; sibling directories would fail to find them even though the
-    # guard correctly prevents a second find_package call.
+    # we can promote newly-created ones to GLOBAL scope and backfill their
+    # INTERFACE_INCLUDE_DIRECTORIES from old-style variables when absent.
     get_property(_before DIRECTORY PROPERTY IMPORTED_TARGETS)
     find_package(${_pkg_name} REQUIRED ${_extra})
     get_property(_after DIRECTORY PROPERTY IMPORTED_TARGETS)
+    set(_new_targets)
     foreach(_tgt IN LISTS _after)
         if(NOT "${_tgt}" IN_LIST _before)
-            if(TARGET "${_tgt}")
-                set_target_properties("${_tgt}" PROPERTIES IMPORTED_GLOBAL TRUE)
-            endif()
+            list(APPEND _new_targets "${_tgt}")
         endif()
+        _c4h_promote_and_backfill("${_pkg_name}" "${_new_targets}")
     endforeach()
 
     message(STATUS "[C4H] ran find_package for ${_pkg_name}")

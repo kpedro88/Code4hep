@@ -25,11 +25,13 @@ c4h_register_upstream(Code4hep)
 # references pybind11::pybind11 but Stitched's config does not call
 # find_dependency(pybind11) itself.
 find_package(pybind11 REQUIRED)
+c4h_backfill_ext_includes(PACKAGE pybind11)
 
 # Stitched is the mandatory upstream framework.
 # Its targets (Stitched::FWCore_*, etc.) are needed for DEPS shorthand resolution.
 find_package(Stitched REQUIRED)
 c4h_register_upstream(Stitched)
+c4h_backfill_ext_includes(PACKAGE stitched)
 
 # do this manually before other packages interfere with FindPython
 find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
