@@ -11,6 +11,10 @@
 
 include(CMakeFindDependencyMacro)
 
+# pybind11 must precede stitched: StitchedTargets.cmake references
+# pybind11::pybind11 but Stitched's own config omits find_dependency(pybind11).
+find_dependency(pybind11 REQUIRED)
+
 # Stitched is a mandatory upstream; load it transitively.
 find_dependency(Stitched REQUIRED)
 
