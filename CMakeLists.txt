@@ -26,6 +26,10 @@ c4h_register_upstream(Code4hep)
 find_package(Stitched REQUIRED)
 c4h_register_upstream(Stitched)
 
+# do this manually before other packages interfere with FindPython
+find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
+set_property(GLOBAL PROPERTY "C4H_EXT_FOUND_Python3" TRUE)
+
 # Optional clang-tidy — enable with: cmake -DC4H_ENABLE_TIDY=ON
 option(C4H_ENABLE_TIDY "Enable clang-tidy for all targets" OFF)
 if(C4H_ENABLE_TIDY)
