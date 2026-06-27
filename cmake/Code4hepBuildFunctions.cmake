@@ -67,6 +67,14 @@ endfunction()
 # adds or overrides a mapping for project-specific externals.
 # ---------------------------------------------------------------------------
 
+# All plugin .so files must land in a single flat directory so that
+# edmPluginRefresh (which requires all its arguments to share one directory)
+# can process them.  Override at cmake time with -DC4H_PLUGIN_OUTPUT_DIR=...
+if(NOT DEFINED C4H_PLUGIN_OUTPUT_DIR)
+    set(C4H_PLUGIN_OUTPUT_DIR "${CMAKE_BINARY_DIR}/edmplugin"
+        CACHE PATH "Output directory for all edmplugin shared libraries")
+endif()
+
 # Built-in exceptions — set once at include time via a guard property.
 get_property(_c4h_ext_init GLOBAL PROPERTY C4H_EXT_INIT SET)
 if(NOT _c4h_ext_init)
@@ -648,6 +656,11 @@ function(c4h_add_plugin)
     if(C4H_PLG_INCLUDE_DIRS)
         target_include_directories(${_target} PRIVATE ${C4H_PLG_INCLUDE_DIRS})
     endif()
+    # --- Redirect output to the shared plugin directory ---
+    # edmPluginRefresh requires all plugin .so files in one directory.
+    set_target_properties(${_target} PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY "${C4H_PLUGIN_OUTPUT_DIR}"
+    )
 
     # --- Extension hook properties ---
     set_target_properties(${_target} PROPERTIES
