@@ -709,6 +709,9 @@ function(c4h_add_executable)
 
     add_executable(${_target} ${_sources})
 
+    target_include_directories(${_target} PRIVATE
+        $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}>
+    )
     if(C4H_EXE_INCLUDE_DIRS)
         target_include_directories(${_target} PRIVATE ${C4H_EXE_INCLUDE_DIRS})
     endif()
@@ -911,6 +914,10 @@ function(c4h_add_test_binary)
     add_executable(${_target} ${_sources})
     # Exclude from default install target
     set_target_properties(${_target} PROPERTIES EXCLUDE_FROM_ALL TRUE)
+
+    target_include_directories(${_target} PRIVATE
+        $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}>
+    )
 
     _c4h_resolve_deps("${C4H_TB_DEPS}"     _resolved_deps)
     _c4h_resolve_deps("${C4H_TB_EXT_DEPS}" _resolved_ext_deps)
