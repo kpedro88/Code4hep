@@ -776,11 +776,16 @@ function(c4h_generate_plugincache)
             "Ensure c4h_add_plugin() has been called before this function.")
     endif()
 
-    set(_args PLUGIN_TARGETS ${_plugin_targets})
-
+    # OUTPUT_DIR: where the .edmplugincache file is written and where
+    # edmPluginRefresh looks for the plugin .so files.  Must match the
+    # LIBRARY_OUTPUT_DIRECTORY set on each plugin target.
     if(C4H_PC_OUTPUT_DIR)
-        list(APPEND _args OUTPUT_DIR "${C4H_PC_OUTPUT_DIR}")
+        set(_plugin_out_dir "${C4H_PC_OUTPUT_DIR}")
+    else()
+        set(_plugin_out_dir "${C4H_PLUGIN_OUTPUT_DIR}")
     endif()
+
+    set(_args PLUGIN_TARGETS ${_plugin_targets} OUTPUT_DIR "${_plugin_out_dir}")
 
     if(C4H_PC_TARGET_NAME)
         list(APPEND _args CACHE_TARGET_NAME "${C4H_PC_TARGET_NAME}")
