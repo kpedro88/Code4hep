@@ -79,6 +79,10 @@ if(NOT _c4h_ext_init)
     endforeach()
     # Packages that require specific components
     set_property(GLOBAL PROPERTY C4H_EXT_ARGS_Python3 "COMPONENTS Development Interpreter")
+    # Catch2: always use CONFIG mode; Catch2WithMain supplies main() so tests
+    # don't need to provide their own.  Map the Catch2 namespace to this target
+    # via a special alias property read in _c4h_resolve_dep.
+    set_property(GLOBAL PROPERTY C4H_EXT_ARGS_Catch2 "CONFIG")
 endif()
 
 # ---------------------------------------------------------------------------
@@ -233,7 +237,13 @@ function(_c4h_resolve_dep DEP OUT_VAR)
         string(REGEX MATCH "^[^:]+" _ns "${DEP}")
         message(STATUS "[C4H] trying to resolve dep ${_ns}")
         _c4h_auto_find_package("${_ns}")
-        set(${OUT_VAR} "${DEP}" PARENT_SCOPE)
+        # Catch2::Catch2 has no main(); redirect to the variant that does so
+        # test binaries link correctly without a hand-written main().
+        if("${DEP}" STREQUAL "Catch2::Catch2")
+            set(${OUT_VAR} "Catch2::Catch2WithMain" PARENT_SCOPE)
+        else()
+            set(${OUT_VAR} "${DEP}" PARENT_SCOPE)
+        endif()
         return()
     endif()
 
