@@ -5,6 +5,7 @@ c4h_add_library(
     DEPS FWCore/Common
     EXT_DEPS
         podio::podio
+        podio::podioIO
         EDM4HEP::edm4hep
         Python3::Python
 )

@@ -7,6 +7,7 @@ set(_c4h_shared
         Code4hep/PodioUtilities
     EXT_DEPS
         podio::podio
+        podio::podioIO
         EDM4HEP::edm4hep
         Python3::Python
 )

@@ -5,7 +5,9 @@ c4h_add_library(
     DEPS
         FWCore/PluginManager
         DataFormats/Common
-    EXT_DEPS podio::podio
+    EXT_DEPS
+        podio::podio
+        podio::podioIO
 )
 
 # Subdirectories with their own CMakeLists.txt are picked up automatically.

@@ -9,6 +9,7 @@ c4h_add_executable(
     EXT_DEPS
         Catch2::Catch2
         podio::podio
+        podio::podioIO
         EDM4HEP::edm4hep
         Python3::Python
 )

@@ -77,31 +77,35 @@ from typing import Optional
 
 # ---------------------------------------------------------------------------
 # Built-in SCRAM tool name → CMake imported target mapping
+#
+# Values are lists of CMake targets so a single SCRAM tool (e.g. "podio") can
+# expand to multiple targets (e.g. podio::podio + podio::podioIO). Single-
+# target tools are still written as one-element lists for uniformity.
 # ---------------------------------------------------------------------------
-SCRAM_TO_CMAKE_TARGETS: dict[str, str] = {
-    "tbb":       "TBB::tbb",
-    "rootcore":  "ROOT::Core",
-    "root":      "ROOT::Core",
-    "rootmath":  "ROOT::MathMore",
-    "rootgeom":  "ROOT::Geom",
-    "boost":     "Boost::boost",
-    "boost_program_options": "Boost::program_options",
-    "eigen":     "Eigen3::Eigen",
-    "clhep":     "CLHEP::CLHEP",
-    "python3":   "Python3::Python",
-    "xrootd":    "XROOTD::XROOTD",
-    "sqlite":    "SQLite::SQLite3",
-    "zlib":      "ZLIB::ZLIB",
-    "bz2lib":    "BZip2::BZip2",
-    "lzma":      "LibLZMA::LibLZMA",
-    "openssl":   "OpenSSL::SSL",
-    "podio":     "podio::podio",
-    "edm4hep":   "EDM4HEP::edm4hep",
-    "cmsswdata": "cmsswdata::cmsswdata",
-    "json":      "nlohmann_json::nlohmann_json",
-    "catch2":    "Catch2::Catch2",
-    "dd4hep-core": "DD4hep::Core",
-    "dd4hep":    "DD4hep::DDAlign DD4hep::DDCond",
+SCRAM_TO_CMAKE_TARGETS: dict[str, list[str]] = {
+    "tbb":       ["TBB::tbb"],
+    "rootcore":  ["ROOT::Core"],
+    "root":      ["ROOT::Core"],
+    "rootmath":  ["ROOT::MathMore"],
+    "rootgeom":  ["ROOT::Geom"],
+    "boost":     ["Boost::boost"],
+    "boost_program_options": ["Boost::program_options"],
+    "eigen":     ["Eigen3::Eigen"],
+    "clhep":     ["CLHEP::CLHEP"],
+    "python3":   ["Python3::Python"],
+    "xrootd":    ["XROOTD::XROOTD"],
+    "sqlite":    ["SQLite::SQLite3"],
+    "zlib":      ["ZLIB::ZLIB"],
+    "bz2lib":    ["BZip2::BZip2"],
+    "lzma":      ["LibLZMA::LibLZMA"],
+    "openssl":   ["OpenSSL::SSL"],
+    "podio":     ["podio::podio", "podio::podioIO"],
+    "edm4hep":   ["EDM4HEP::edm4hep"],
+    "cmsswdata": ["cmsswdata::cmsswdata"],
+    "json":      ["nlohmann_json::nlohmann_json"],
+    "catch2":    ["Catch2::Catch2"],
+    "dd4hep-core": ["DD4hep::Core"],
+    "dd4hep":    ["DD4hep::DDAlign", "DD4hep::DDCond"],
 }
 
 # ---------------------------------------------------------------------------
@@ -400,7 +404,7 @@ def _parse_if_chain(elem: ET.Element, filepath: str) -> IfNode:
 class ConvertContext:
     filepath: str
     project_name: str
-    target_map: dict[str, str]  # merged SCRAM_TO_CMAKE_TARGETS + --map overrides
+    target_map: dict[str, list[str]]  # merged SCRAM_TO_CMAKE_TARGETS + --map overrides
     errors: list[str] = field(default_factory=list)
 
     def unsupported(self, feature: str, explanation: str, line: int = 0) -> str:
@@ -413,15 +417,17 @@ class ConvertContext:
         self.errors.append(msg)
         return f"# UNSUPPORTED: {feature} — {explanation}. Manual intervention required."
 
-    def resolve_ext_dep(self, scram_name: str, line: int = 0) -> tuple[str, bool]:
+    def resolve_ext_dep(self, scram_name: str, line: int = 0) -> tuple[list[str], bool]:
         """
-        Resolve a SCRAM external tool name to a CMake target string.
-        Returns (cmake_target_or_placeholder, is_known).
+        Resolve a SCRAM external tool name to a list of CMake target strings.
+        A single SCRAM tool may map to multiple CMake targets (e.g. podio →
+        [podio::podio, podio::podioIO]).
+        Returns (cmake_targets, is_known).
         """
         key = scram_name.lower()
         if key in self.target_map:
             return self.target_map[key], True
-        return scram_name, False
+        return [scram_name], False
 
 # ---------------------------------------------------------------------------
 # Dependency classifier
@@ -548,10 +554,10 @@ def _uses_to_deps(
             # Two-component path — unambiguously an internal cross-package dep
             internal.append(use.name)
         else:
-            cmake_target, known = ctx.resolve_ext_dep(use.name, line)
+            cmake_targets, known = ctx.resolve_ext_dep(use.name, line)
             if known:
-                # Found in the external tool map — EXT_DEP
-                external.append(cmake_target)
+                # Found in the external tool map — EXT_DEP (may be multiple targets)
+                external.extend(cmake_targets)
             else:
                 # Not in the map — treat as a same-repo bare build-tree target
                 internal.append(use.name)
@@ -600,7 +606,7 @@ def _format_shared_var(
     include_paths: list[str],
 ) -> list[str]:
     """
-    Emit  set(<var_name>  DEPS ... EXT_DEPS ... LINK_LIBS ... INCLUDE_DIRS ...)
+    Emit  set(<var_name>  DEPS ...  EXT_DEPS ...  LINK_LIBS ...  INCLUDE_DIRS ...)
     for use as a shared-dependency variable when multiple <library> elements in
     one BuildFile all inherit the same top-level deps.
     """
@@ -1091,9 +1097,13 @@ def render(statements: list[str], source_path: str, confirmed: bool = False) -> 
     Adds the required header comment.
     Pass confirmed=True (--confirm flag) to omit the 'Review before committing.' note.
     """
-    header = "# Auto-generated by buildfile_to_cmake.py from BuildFile.xml."
-    if not confirmed:
-        header += " Review before committing."
+    if confirmed:
+        header = "# Auto-generated by buildfile_to_cmake.py from BuildFile.xml."
+    else:
+        header = (
+            "# Auto-generated by buildfile_to_cmake.py from BuildFile.xml. "
+            "Review before committing."
+        )
     lines: list[str] = [header, ""]
     lines.extend(statements)
     # Ensure trailing newline
@@ -1106,10 +1116,12 @@ def render(statements: list[str], source_path: str, confirmed: bool = False) -> 
 # Map file loader
 # ---------------------------------------------------------------------------
 
-def load_map_file(path: str) -> dict[str, str]:
+def load_map_file(path: str) -> dict[str, list[str]]:
     """
     Load a SCRAM-to-CMake target override map from a .py file.
     The file must contain only a bare Python dict literal.
+    Values may be a string (single target) or a list of strings (multiple
+    targets). Both are normalised to list[str].
     Uses ast.literal_eval — no imports or expressions permitted.
     """
     try:
@@ -1132,7 +1144,20 @@ def load_map_file(path: str) -> dict[str, str]:
             file=sys.stderr,
         )
         sys.exit(2)
-    return {str(k): str(v) for k, v in result.items()}
+    normalised: dict[str, list[str]] = {}
+    for k, v in result.items():
+        if isinstance(v, str):
+            normalised[str(k)] = [v]
+        elif isinstance(v, list):
+            normalised[str(k)] = [str(t) for t in v]
+        else:
+            print(
+                f"ERROR: Map file '{path}': value for '{k}' must be a string or "
+                f"list of strings, got {type(v).__name__}.",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+    return normalised
 
 # ---------------------------------------------------------------------------
 # Directory scanner
@@ -1308,10 +1333,11 @@ Scan-dir mode (--scan-dir DIR):
 
 Map file format:
   A .py file containing a bare Python dict literal mapping SCRAM tool names
-  (lowercase) to CMake imported-target strings. Example:
+  (lowercase) to CMake imported-target strings. Values may be a single string
+  or a list of strings when a tool maps to multiple CMake targets. Example:
       {
           "myexternaltool": "MyExternalTool::MyExternalTool",
-          "root": "ROOT::Core ROOT::RIO",   # override to add ROOT::RIO
+          "podio": ["podio::podio", "podio::podioIO"],  # multi-target override
       }
   The file is read with ast.literal_eval — no imports or expressions allowed.
 
@@ -1392,7 +1418,7 @@ Exit codes:
     target_map = dict(SCRAM_TO_CMAKE_TARGETS)
     if args.map:
         overrides = load_map_file(str(pathlib.Path(args.map).resolve()))
-        target_map.update({k.lower(): v for k, v in overrides.items()})
+        target_map.update({k.lower(): v for k, v in overrides.items()})  # values already list[str]
 
     # -----------------------------------------------------------------------
     # Scan-dir mode

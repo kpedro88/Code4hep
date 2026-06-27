@@ -6,7 +6,8 @@ c4h_add_library(
         FWCore/Framework
         FWCore/Utilities
     EXT_DEPS
-        DD4hep::DDAlign DD4hep::DDCond
+        DD4hep::DDAlign
+        DD4hep::DDCond
         ROOT::MathMore
         ROOT::Geom
 )

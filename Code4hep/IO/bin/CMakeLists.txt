@@ -10,5 +10,6 @@ c4h_add_executable(
         nlohmann_json::nlohmann_json
         Python3::Python
         podio::podio
+        podio::podioIO
         EDM4HEP::edm4hep
 )
