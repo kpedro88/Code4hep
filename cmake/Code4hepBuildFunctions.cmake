@@ -115,6 +115,7 @@ function(c4h_register_ext_package)
     endif()
 endfunction()
 
+# ---------------------------------------------------------------------------
 # Internal: promote a list of imported targets to GLOBAL scope and backfill
 # their INTERFACE_INCLUDE_DIRECTORIES from old-style <pkg>_INCLUDE_DIRS /
 # <pkg>_INCLUDE_DIR variables when the property is absent.
@@ -155,7 +156,7 @@ endfunction()
 # c4h_backfill_ext_includes(PACKAGE <name> [TARGETS <tgt>...])
 #
 # Public helper for packages found BEFORE the c4h machinery loads (e.g.
-# stitched in the top-level CMakeLists.txt).  Call it right after
+# Stitched in the top-level CMakeLists.txt).  Call it right after
 # find_package() to ensure all imported targets from that package have
 # INTERFACE_INCLUDE_DIRECTORIES populated and are promoted to GLOBAL scope.
 #
@@ -207,9 +208,8 @@ function(_c4h_auto_find_package namespace)
         if(NOT "${_tgt}" IN_LIST _before)
             list(APPEND _new_targets "${_tgt}")
         endif()
-        _c4h_promote_and_backfill("${_pkg_name}" "${_new_targets}")
     endforeach()
-
+    _c4h_promote_and_backfill("${_pkg_name}" "${_new_targets}")
     message(STATUS "[C4H] ran find_package for ${_pkg_name}")
     get_property(found_targets DIRECTORY PROPERTY IMPORTED_TARGETS)
     message(STATUS "[C4H] All available imported targets: ${found_targets}")
@@ -240,7 +240,7 @@ function(_c4h_resolve_dep DEP OUT_VAR)
     if("${DEP}" MATCHES "/")
         string(REPLACE "/" "_" _bare "${DEP}")
         # Split at the first '/' to distinguish two dep styles:
-        #   FWCore/Utilities  — FWCore is a subsystem inside stitched; full path is the target suffix
+        #   FWCore/Utilities  — FWCore is a subsystem inside Stitched; full path is the target suffix
         #   Code4hep/PodioUtilities — Code4hep IS the project; remainder is the direct target name
         string(REGEX MATCH "^([^/]+)/(.+)$" _c4h_slash_match "${DEP}")
         set(_first_component "${CMAKE_MATCH_1}")
@@ -258,15 +258,14 @@ function(_c4h_resolve_dep DEP OUT_VAR)
                 set(${OUT_VAR} "${_up}::${_bare}" PARENT_SCOPE)
                 return()
             endif()
-            string(TOLOWER "${_up}" _up_lower)
             if(TARGET "${_up}::${_up_lower}_${_bare}")
                 set(${OUT_VAR} "${_up}::${_up_lower}_${_bare}" PARENT_SCOPE)
                 return()
             endif()
 
             # Style B: project-qualified — first component IS the upstream project name.
-            # (e.g. Code4hep/PodioUtilities with upstream code4hep)
-            # Installed package exposes code4hep::PodioUtilities;
+            # (e.g. Code4hep/PodioUtilities with upstream Code4hep)
+            # Installed package exposes Code4hep::PodioUtilities;
             # in-tree build exposes bare PodioUtilities.
             if("${_first_lower}" STREQUAL "${_up_lower}")
                 if(TARGET "${_up}::${_rest_bare}")
@@ -279,7 +278,6 @@ function(_c4h_resolve_dep DEP OUT_VAR)
                     return()
                 endif()
             endif()
-
         endforeach()
         message(FATAL_ERROR
             "c4h: Cannot resolve dependency '${DEP}' (looked for "
@@ -306,6 +304,26 @@ function(_c4h_resolve_deps DEPS_LIST OUT_VAR)
         list(APPEND _resolved "${_r}")
     endforeach()
     set(${OUT_VAR} "${_resolved}" PARENT_SCOPE)
+endfunction()
+
+# ---------------------------------------------------------------------------
+# Internal helper: schedule c4h_auto_subdirectories() to run at the end of
+# the CALLING directory's scope (not the function scope).
+#
+# Idempotent — the first c4h_add_* call in a CMakeLists.txt registers the
+# deferred scan; subsequent calls in the same file are no-ops.
+#
+# Requires CMake 3.19+ (cmake_language DEFER), which is satisfied by the
+# project's minimum of 3.23.
+# ---------------------------------------------------------------------------
+function(_c4h_defer_auto_subdirectories)
+    get_property(_scheduled DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+                 PROPERTY _C4H_AUTO_SUBDIRS_SCHEDULED)
+    if(NOT _scheduled)
+        set_property(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+                     PROPERTY _C4H_AUTO_SUBDIRS_SCHEDULED TRUE)
+        cmake_language(DEFER CALL c4h_auto_subdirectories)
+    endif()
 endfunction()
 
 # ---------------------------------------------------------------------------
@@ -337,9 +355,10 @@ function(c4h_add_library)
         C4H_LIB
         "RECURSE_SOURCES;NO_SYMBOL_CHECK;NO_TIDY"
         "NAME;DICT_HEADER;DICT_XML"
-        "SOURCES;HEADERS;EXCLUDE_SOURCES;DEPS;EXT_DEPS;PRIVATE_DEPS;EXT_PRIVATE_DEPS;INCLUDE_DIRS;INSTALL_SCRIPTS"
+        "SOURCES;HEADERS;EXCLUDE_SOURCES;DEPS;EXT_DEPS;LINK_LIBS;PRIVATE_DEPS;EXT_PRIVATE_DEPS;INCLUDE_DIRS;INSTALL_SCRIPTS"
         ${ARGN}
     )
+    _c4h_defer_auto_subdirectories()
 
     # --- Derive or override target name ---
     _c4h_derive_target_name(_auto_target _pkg_path)
@@ -430,6 +449,12 @@ function(c4h_add_library)
             PRIVATE ${_priv_deps} ${_ext_priv_deps}
         )
     endif()
+    # LINK_LIBS: raw linker libraries passed directly (e.g. converted from
+    # SCRAM's <lib name="mylib"/> which implies -lmylib).  Bypasses dep
+    # resolution — use only for legacy raw-link dependencies with no CMake target.
+    if(C4H_LIB_LINK_LIBS)
+        target_link_libraries(${_C4H_TARGET} PRIVATE ${C4H_LIB_LINK_LIBS})
+    endif()
 
     # --- Symbol checking: -Wl,--no-undefined (Linux only) ---
     if(NOT C4H_LIB_NO_SYMBOL_CHECK AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -504,13 +529,13 @@ endfunction()
 # auto-globbing, EXCLUDE_SOURCES, and a NO_CFIPYTHON escape for plugins
 # that do not implement fillDescriptions().
 #
-# Because all user-defined plugin factories subclass the base PluginFactory
-# class, edmWriteConfigs works uniformly for all plugin types.
-#
 # NAME is optional. When omitted, the target name is derived from the
 # directory path using the same algorithm as c4h_add_library (e.g.
-# code4hep/TestModules/plugins → plugin_TestModules_plugins).
+# Code4hep/TestModules/plugins → plugin_TestModules_plugins).
 # Supply NAME only when you need to override the auto-derived name.
+#
+# Because all user-defined plugin factories subclass the base PluginFactory
+# class, edmWriteConfigs works uniformly for all plugin types.
 #
 # Per-target compile flag overrides are intentionally absent. See the note
 # in c4h_add_library for the correct CMAKE_BUILD_TYPE-based equivalents.
@@ -520,9 +545,11 @@ function(c4h_add_plugin)
         C4H_PLG
         "NO_TIDY;NO_CFIPYTHON"
         "NAME"
-        "SOURCES;EXCLUDE_SOURCES;DEPS;EXT_DEPS;INCLUDE_DIRS"
+        "SOURCES;EXCLUDE_SOURCES;DEPS;EXT_DEPS;LINK_LIBS;INCLUDE_DIRS"
         ${ARGN}
     )
+
+    _c4h_defer_auto_subdirectories()
 
     # --- Derive target name (same algorithm as c4h_add_library) ---
     _c4h_derive_target_name(_auto_target _pkg_path)
@@ -558,8 +585,8 @@ function(c4h_add_plugin)
 
     # --- Resolve deps (EXT_DEPS pass through unchanged but trigger find_package) ---
     _c4h_resolve_deps("${C4H_PLG_DEPS}"     _resolved_deps)
-	_c4h_resolve_deps("${C4H_PLG_EXT_DEPS}" _resolved_ext_deps)
-	set(_all_link_libs ${_resolved_deps} ${_resolved_ext_deps})
+    _c4h_resolve_deps("${C4H_PLG_EXT_DEPS}" _resolved_ext_deps)
+    set(_all_link_libs ${_resolved_deps} ${_resolved_ext_deps})
 
     # --- Create plugin target ---
     if(C4H_PLG_NO_CFIPYTHON)
@@ -571,8 +598,11 @@ function(c4h_add_plugin)
                 $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}>
                 $<INSTALL_INTERFACE:include>
         )
-        if(_link_libs)
-            target_link_libraries(${_target} PUBLIC ${_link_libs})
+        if(_all_link_libs)
+            target_link_libraries(${_target} PUBLIC ${_all_link_libs})
+        endif()
+        if(C4H_PLG_LINK_LIBS)
+            target_link_libraries(${_target} PRIVATE ${C4H_PLG_LINK_LIBS})
         endif()
         install(TARGETS ${_target}
             LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
@@ -584,11 +614,27 @@ function(c4h_add_plugin)
         stitched_generate_plugin(
             TARGET         "${_target}"
             SOURCES        ${_sources}
-            LINK_LIBRARIES ${_link_libs}
+            LINK_LIBRARIES ${_all_link_libs} ${C4H_PLG_LINK_LIBS}
         )
+        # stitched_generate_plugin sets LINK_LIBRARIES via a property rather than
+        # target_link_libraries(), so CMake's INTERFACE_INCLUDE_DIRECTORIES
+        # propagation never fires for the plugin target.  Re-linking with an
+        # explicit PRIVATE keyword forces it without changing the link list
+        # (CMake deduplicates).
+        if(_all_link_libs)
+            target_link_libraries(${_target} PRIVATE ${_all_link_libs})
+        endif()
+        if(C4H_PLG_LINK_LIBS)
+            target_link_libraries(${_target} PRIVATE ${C4H_PLG_LINK_LIBS})
+        endif()
     endif()
 
-    # --- Extra include directories (applies to both cases) ---
+    # --- Include directories (applies to both code paths) ---
+    # Add CMAKE_SOURCE_DIR so in-tree headers (e.g. Code4hep/Foo/Bar.h) are
+    # found with the same include path as they are in c4h_add_library.
+    target_include_directories(${_target} PRIVATE
+        $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}>
+    )
     if(C4H_PLG_INCLUDE_DIRS)
         target_include_directories(${_target} PRIVATE ${C4H_PLG_INCLUDE_DIRS})
     endif()
@@ -621,9 +667,10 @@ function(c4h_add_executable)
         C4H_EXE
         ""
         "NAME"
-        "SOURCES;EXCLUDE_SOURCES;DEPS;EXT_DEPS;INCLUDE_DIRS;INSTALL_SCRIPTS"
+        "SOURCES;EXCLUDE_SOURCES;DEPS;EXT_DEPS;LINK_LIBS;INCLUDE_DIRS;INSTALL_SCRIPTS"
         ${ARGN}
     )
+    _c4h_defer_auto_subdirectories()
 
     if(NOT C4H_EXE_NAME)
         message(FATAL_ERROR "c4h_add_executable: NAME is required.")
@@ -661,6 +708,9 @@ function(c4h_add_executable)
     set(_link_libs ${_resolved_deps} ${_resolved_ext_deps})
     if(_link_libs)
         target_link_libraries(${_target} PRIVATE ${_link_libs})
+    endif()
+    if(C4H_EXE_LINK_LIBS)
+        target_link_libraries(${_target} PRIVATE ${C4H_EXE_LINK_LIBS})
     endif()
 
     install(TARGETS ${_target}
@@ -818,9 +868,10 @@ function(c4h_add_test_binary)
         C4H_TB
         "BUILD_ONLY"
         "NAME;WORKING_DIRECTORY"
-        "SOURCES;EXCLUDE_SOURCES;DEPS;EXT_DEPS;ENVIRONMENT;DEPENDS;COMMAND"
+        "SOURCES;EXCLUDE_SOURCES;DEPS;EXT_DEPS;LINK_LIBS;ENVIRONMENT;DEPENDS;COMMAND"
         ${ARGN}
     )
+    _c4h_defer_auto_subdirectories()
 
     if(NOT C4H_TB_NAME)
         message(FATAL_ERROR "c4h_add_test_binary: NAME is required.")
@@ -856,6 +907,9 @@ function(c4h_add_test_binary)
     set(_link_libs ${_resolved_deps} ${_resolved_ext_deps})
     if(_link_libs)
         target_link_libraries(${_target} PRIVATE ${_link_libs})
+    endif()
+    if(C4H_TB_LINK_LIBS)
+        target_link_libraries(${_target} PRIVATE ${C4H_TB_LINK_LIBS})
     endif()
 
     if(NOT C4H_TB_BUILD_ONLY)
@@ -968,12 +1022,17 @@ endfunction()
 # CMAKE_CURRENT_SOURCE_DIR that contains a CMakeLists.txt.  Directories are
 # processed in alphabetical order.
 #
-# Use this in mid-level (structural) CMakeLists.txt files — those that exist
-# only to wire subdirectories together and have no c4h_add_library() call of
-# their own.  It can also be used at the package level to pull in a plugins/
-# or test/ subdirectory automatically.
+# Normally you do NOT need to call this function explicitly.  Any c4h_add_*
+# call schedules it via cmake_language(DEFER) to run at the end of the
+# enclosing CMakeLists.txt scope, so subdirectories are always picked up
+# without any extra boilerplate.
 #
-# EXCLUDE: directory names (not paths) to skip.
+# The only reason to call it explicitly is when EXCLUDE is needed to skip
+# specific subdirectories, or in a purely structural CMakeLists.txt that has
+# no c4h_add_* call of its own.
+#
+# EXCLUDE: directory names (not paths) to skip.  An explicit call with EXCLUDE
+#          takes precedence over the automatically deferred call.
 #
 # Like source globbing, this relies on a glob at configure time and will not
 # pick up new subdirectories without a cmake re-run.  The staleness warning
@@ -981,6 +1040,17 @@ endfunction()
 # ---------------------------------------------------------------------------
 function(c4h_auto_subdirectories)
     cmake_parse_arguments(C4H_ASD "" "" "EXCLUDE" ${ARGN})
+
+    # If already run explicitly in this directory, the deferred call (which
+    # arrives with no arguments) is a no-op.
+    get_property(_done DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+                 PROPERTY _C4H_AUTO_SUBDIRS_DONE)
+    if(_done AND NOT C4H_ASD_EXCLUDE AND NOT C4H_ASD_UNPARSED_ARGUMENTS)
+        # Deferred no-arg call after an explicit call already ran — skip.
+        return()
+    endif()
+    set_property(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+                 PROPERTY _C4H_AUTO_SUBDIRS_DONE TRUE)
 
     file(GLOB _children
         LIST_DIRECTORIES true
