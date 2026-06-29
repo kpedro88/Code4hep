@@ -631,6 +631,29 @@ def _format_shared_var(
     return lines
 
 
+# ---------------------------------------------------------------------------
+# Dropped-feature reporter
+#
+# The slim c4h_* functions accept only NAME/SOURCES/DEPS/EXT_DEPS (plus
+# COMMAND for tests). SCRAM features outside that set have no convenience-
+# function argument; emit an # UNSUPPORTED marker so the generated CMake stays
+# valid and the feature is handled by hand on the target afterwards, rather
+# than silently corrupting a c4h_* call with an unknown keyword.
+# ---------------------------------------------------------------------------
+def _report_dropped(
+    ctx: ConvertContext,
+    line: int,
+    dropped: list[tuple[str, object, str]],
+) -> list[str]:
+    """For each (feature, value, hint) whose value is truthy, emit one
+    # UNSUPPORTED line via ctx.unsupported(). Returns the comment lines."""
+    out: list[str] = []
+    for feature, value, hint in dropped:
+        if value:
+            out.append(ctx.unsupported(feature, hint, line))
+    return out
+
+
 def _convert_library(node: LibraryNode, ctx: ConvertContext,
                      top_include_paths: list[str],
                      top_uses: Optional[list["UseNode"]] = None,
@@ -684,12 +707,14 @@ def _convert_library(node: LibraryNode, ctx: ConvertContext,
             args.append(("DEPS", internal_deps))
         if external_deps:
             args.append(("EXT_DEPS", external_deps))
-        if link_libs:
-            args.append(("LINK_LIBS", link_libs))
-        if include_dirs:
-            args.append(("INCLUDE_DIRS", include_dirs))
         if shared_var:
             args.append((f"${{{shared_var}}}", None))
+        out.extend(_report_dropped(ctx, node.line, [
+            ("<lib> (raw linker libs)", link_libs,
+             "add to plugin_<name> with target_link_libraries() after c4h_add_plugin"),
+            ("<include_path>", include_dirs,
+             "add to plugin_<name> with target_include_directories() after c4h_add_plugin"),
+        ]))
         out.extend(_format_c4h_call("c4h_add_plugin", args, comment=elem_comment))
     else:
         args = []
@@ -699,32 +724,31 @@ def _convert_library(node: LibraryNode, ctx: ConvertContext,
         if node.file_patterns:
             sources = node.file_patterns
             args.append(("SOURCES", sources))
-        if flags.get("RECURSE_SOURCES") == "1" or flags.get("ADD_SUBDIR") == "1":
-            args.append(("RECURSE_SOURCES", None))
-        skip = flags.get("SKIP_FILES", "")
-        if skip:
-            args.append(("EXCLUDE_SOURCES", skip.split()))
-        dict_header = flags.get("LCG_DICT_HEADER", "")
-        if dict_header:
-            args.append(("DICT_HEADER", dict_header))
-        dict_xml = flags.get("LCG_DICT_XML", "")
-        if dict_xml:
-            args.append(("DICT_XML", dict_xml))
-        if flags.get("NO_LIB_CHECKING") == "1":
-            args.append(("NO_SYMBOL_CHECK", None))
-        install_scripts = flags.get("INSTALL_SCRIPTS", "")
-        if install_scripts:
-            args.append(("INSTALL_SCRIPTS", install_scripts.split()))
         if internal_deps:
             args.append(("DEPS", internal_deps))
         if external_deps:
             args.append(("EXT_DEPS", external_deps))
-        if link_libs:
-            args.append(("LINK_LIBS", link_libs))
-        if include_dirs:
-            args.append(("INCLUDE_DIRS", include_dirs))
         if shared_var:
             args.append((f"${{{shared_var}}}", None))
+        recurse = flags.get("RECURSE_SOURCES") == "1" or flags.get("ADD_SUBDIR") == "1"
+        out.extend(_report_dropped(ctx, node.line, [
+            ("RECURSE_SOURCES/ADD_SUBDIR", recurse,
+             "pass recursive globs explicitly via SOURCES (e.g. src/**/*.cc)"),
+            ("SKIP_FILES", flags.get("SKIP_FILES", ""),
+             "narrow the SOURCES glob to exclude these files"),
+            ("LCG_DICT_HEADER", flags.get("LCG_DICT_HEADER", ""),
+             "call c4h_generate_dictionary(TARGET <name> HEADERS ...) after c4h_add_library"),
+            ("LCG_DICT_XML", flags.get("LCG_DICT_XML", ""),
+             "call c4h_generate_dictionary(TARGET <name> LINKDEF ...) after c4h_add_library"),
+            ("NO_LIB_CHECKING", flags.get("NO_LIB_CHECKING") == "1",
+             "remove -Wl,--no-undefined with target_link_options() after c4h_add_library"),
+            ("INSTALL_SCRIPTS", flags.get("INSTALL_SCRIPTS", ""),
+             "install with install(PROGRAMS ...) after c4h_add_library"),
+            ("<lib> (raw linker libs)", link_libs,
+             "add with target_link_libraries(<name> ...) after c4h_add_library"),
+            ("<include_path>", include_dirs,
+             "add with target_include_directories(<name> ...) after c4h_add_library"),
+        ]))
         out.extend(_format_c4h_call("c4h_add_library", args, comment=elem_comment))
 
     # Handle remaining flags
@@ -737,8 +761,8 @@ def _convert_library(node: LibraryNode, ctx: ConvertContext,
             ))
         elif flag_name == "ROOTMAP" and flag_val == "1":
             out.append(
-                "# NOTE: ROOTMAP=1 — add OPTIONS --rootmap to "
-                "c4h_generate_dictionary if needed"
+                "# NOTE: ROOTMAP=1 — pass --rootmap via the OPTIONS argument of "
+                "stitched_generate_dictionary if needed"
             )
         elif flag_name == "GENREFLEX_FAILS_ON_WARNS" and flag_val == "1":
             out.append(
@@ -756,8 +780,8 @@ def _convert_library(node: LibraryNode, ctx: ConvertContext,
             out.append(f"# WARNING: LLVM_PLUGIN={flag_val} is not supported.")
         elif flag_name == "LLVM_CHECKERS":
             out.append(f"# WARNING: LLVM_CHECKERS={flag_val} is not supported.")
-        # EDM_PLUGIN, ADD_SUBDIR, SKIP_FILES, LCG_DICT_*, NO_LIB_CHECKING,
-        # INSTALL_SCRIPTS, RECURSE_SOURCES already handled above.
+        # EDM_PLUGIN is consumed above; ADD_SUBDIR/SKIP_FILES/LCG_DICT_*/
+        # NO_LIB_CHECKING/INSTALL_SCRIPTS are reported via _report_dropped above.
 
     return out
 
@@ -777,12 +801,14 @@ def _convert_bin(node: BinNode, ctx: ConvertContext,
         args.append(("DEPS", internal_deps))
     if external_deps:
         args.append(("EXT_DEPS", external_deps))
-    if link_libs:
-        args.append(("LINK_LIBS", link_libs))
-    if include_dirs:
-        args.append(("INCLUDE_DIRS", include_dirs))
 
     out = list(dep_warnings)
+    out.extend(_report_dropped(ctx, node.line, [
+        ("<lib> (raw linker libs)", link_libs,
+         "add with target_link_libraries(bin_<name> ...) after c4h_add_executable"),
+        ("<include_path>", include_dirs,
+         "add with target_include_directories(bin_<name> ...) after c4h_add_executable"),
+    ]))
     out.extend(_format_c4h_call("c4h_add_executable", args, comment=elem_comment))
     return out
 
@@ -829,12 +855,14 @@ def _convert_test(node: TestNode, ctx: ConvertContext) -> list[str]:
         args.append(("DEPS", internal_deps))
     # External deps and raw linker libs are intentionally omitted: c4h_add_test
     # does not link anything, and system libraries are on the runtime path already.
-    if env_pairs:
-        args.append(("ENVIRONMENT", env_pairs))
-    if depends:
-        args.append(("DEPENDS", depends))
 
     out = list(dep_warnings)
+    out.extend(_report_dropped(ctx, node.line, [
+        ("SETENV", env_pairs,
+         "bake the variable into the test COMMAND or the test script"),
+        ("PRE_TEST", depends,
+         "order with set_tests_properties(<name> PROPERTIES DEPENDS ...) after c4h_add_test"),
+    ]))
     if localtop_comment:
         out.append(localtop_comment)
 
@@ -988,10 +1016,12 @@ def convert(nodes: list[BuildFileNode], ctx: ConvertContext) -> list[str]:
                 args.append(("DEPS", internal_deps))
             if external_deps:
                 args.append(("EXT_DEPS", external_deps))
-            if top_link_libs:
-                args.append(("LINK_LIBS", top_link_libs))
-            if top_include_paths:
-                args.append(("INCLUDE_DIRS", top_include_paths))
+            statements.extend(_report_dropped(ctx, 0, [
+                ("<lib> (raw linker libs)", top_link_libs,
+                 "add to plugin_<name> with target_link_libraries() after c4h_add_plugin"),
+                ("<include_path>", top_include_paths,
+                 "add to plugin_<name> with target_include_directories() after c4h_add_plugin"),
+            ]))
             statements.extend(_format_c4h_call(
                 "c4h_add_plugin", args,
                 comment="top-level <flags EDM_PLUGIN=\"1\"/> — implicit plugin from *.cc"
@@ -1001,30 +1031,28 @@ def convert(nodes: list[BuildFileNode], ctx: ConvertContext) -> list[str]:
             statements.extend(dep_warnings)
 
             args = []
-            if top_flags_merged.get("ADD_SUBDIR") == "1":
-                args.append(("RECURSE_SOURCES", None))
-            skip = top_flags_merged.get("SKIP_FILES", "")
-            if skip:
-                args.append(("EXCLUDE_SOURCES", skip.split()))
-            dict_header = top_flags_merged.get("LCG_DICT_HEADER", "")
-            if dict_header:
-                args.append(("DICT_HEADER", dict_header))
-            dict_xml = top_flags_merged.get("LCG_DICT_XML", "")
-            if dict_xml:
-                args.append(("DICT_XML", dict_xml))
-            if top_flags_merged.get("NO_LIB_CHECKING") == "1":
-                args.append(("NO_SYMBOL_CHECK", None))
-            install_scripts = top_flags_merged.get("INSTALL_SCRIPTS", "")
-            if install_scripts:
-                args.append(("INSTALL_SCRIPTS", install_scripts.split()))
             if internal_deps:
                 args.append(("DEPS", internal_deps))
             if external_deps:
                 args.append(("EXT_DEPS", external_deps))
-            if top_link_libs:
-                args.append(("LINK_LIBS", top_link_libs))
-            if top_include_paths:
-                args.append(("INCLUDE_DIRS", top_include_paths))
+            statements.extend(_report_dropped(ctx, 0, [
+                ("ADD_SUBDIR", top_flags_merged.get("ADD_SUBDIR") == "1",
+                 "pass recursive globs explicitly via SOURCES (e.g. src/**/*.cc)"),
+                ("SKIP_FILES", top_flags_merged.get("SKIP_FILES", ""),
+                 "narrow the SOURCES glob to exclude these files"),
+                ("LCG_DICT_HEADER", top_flags_merged.get("LCG_DICT_HEADER", ""),
+                 "call c4h_generate_dictionary(TARGET <name> HEADERS ...) after c4h_add_library"),
+                ("LCG_DICT_XML", top_flags_merged.get("LCG_DICT_XML", ""),
+                 "call c4h_generate_dictionary(TARGET <name> LINKDEF ...) after c4h_add_library"),
+                ("NO_LIB_CHECKING", top_flags_merged.get("NO_LIB_CHECKING") == "1",
+                 "remove -Wl,--no-undefined with target_link_options() after c4h_add_library"),
+                ("INSTALL_SCRIPTS", top_flags_merged.get("INSTALL_SCRIPTS", ""),
+                 "install with install(PROGRAMS ...) after c4h_add_library"),
+                ("<lib> (raw linker libs)", top_link_libs,
+                 "add with target_link_libraries(<name> ...) after c4h_add_library"),
+                ("<include_path>", top_include_paths,
+                 "add with target_include_directories(<name> ...) after c4h_add_library"),
+            ]))
 
             statements.extend(_format_c4h_call(
                 "c4h_add_library", args,

@@ -27,7 +27,7 @@ function(_c4h_derive_target_name OUT_VAR OUT_PATH_VAR)
     file(RELATIVE_PATH _rel "${CMAKE_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}")
     # Drop the first component (inner repo dir)
     string(REGEX REPLACE "^[^/]+/" "" _stripped "${_rel}")
-    # Package path (before replacing slashes) — used for C4H_PACKAGE_PATH
+    # Package path (before replacing slashes) — used as the ctest LABEL
     set(${OUT_PATH_VAR} "${_stripped}" PARENT_SCOPE)
     # Target name: replace / with _
     string(REPLACE "/" "_" _target "${_stripped}")
@@ -47,24 +47,17 @@ endfunction()
 # ---------------------------------------------------------------------------
 # Automatic find_package() for EXT_DEPS targets.
 #
-# When a developer writes EXT_DEPS podio::podio (or ROOT::Core, TBB::tbb,
-# etc.), the c4h_* functions call _c4h_auto_find_package() with the namespace
-# extracted from the target string.  The rules are:
+# When a developer writes EXT_DEPS podio::podio (or ROOT::Core, TBB::tbb, etc.),
+# the c4h_* functions call _c4h_auto_find_package() with the namespace before
+# the '::'.  By default it runs find_package(<namespace> REQUIRED); two global
+# properties override that for the packages that need it:
 #
-#   Default:  find_package(<namespace> REQUIRED)
-#   Override: if C4H_EXT_NAME_<namespace> is set, use that as the package name.
-#             if C4H_EXT_ARGS_<namespace> is set, append it after REQUIRED.
+#   C4H_EXT_NAME_<ns>   package name to look up, when it differs from <ns>
+#   C4H_EXT_ARGS_<ns>   extra arguments appended after REQUIRED (e.g. CONFIG)
 #
-# Built-in overrides cover the two real exception categories:
-#   Name differs from namespace:  SQLite  → SQLite3
-#   Needs CONFIG mode:            podio, EDM4HEP, cmsswdata, nlohmann_json, HepMC3
-#
-# Everything else (ROOT, TBB, Boost, Eigen3, CLHEP, Python3, XROOTD, ZLIB,
-# BZip2, LibLZMA, OpenSSL, …) works with the default rule, so no entry is
-# needed for them at all.
-#
-# c4h_register_ext_package(NAMESPACE <ns> [PACKAGE <name>] [EXTRA_ARGS <...>])
-# adds or overrides a mapping for project-specific externals.
+# To add an override for another external, set the matching property before the
+# relevant c4h_add_* call, exactly as the built-ins below do. Everything else
+# (ROOT, TBB, Boost, Eigen3, CLHEP, …) works with the default rule.
 # ---------------------------------------------------------------------------
 
 # All plugin .so files must land in a single flat directory so that
@@ -75,7 +68,7 @@ if(NOT DEFINED C4H_PLUGIN_OUTPUT_DIR)
         CACHE PATH "Output directory for all edmplugin shared libraries")
 endif()
 
-# Built-in exceptions — set once at include time via a guard property.
+# Built-in find_package() overrides — set once at include time.
 get_property(_c4h_ext_init GLOBAL PROPERTY C4H_EXT_INIT SET)
 if(NOT _c4h_ext_init)
     set_property(GLOBAL PROPERTY C4H_EXT_INIT TRUE)
@@ -87,144 +80,44 @@ if(NOT _c4h_ext_init)
     endforeach()
     # Packages that require specific components
     set_property(GLOBAL PROPERTY C4H_EXT_ARGS_Python3 "COMPONENTS Development Interpreter")
-    # Catch2: always use CONFIG mode; Catch2WithMain supplies main() so tests
-    # don't need to provide their own.  Map the Catch2 namespace to this target
-    # via a special alias property read in _c4h_resolve_dep.
+    # Catch2: always use CONFIG mode.  (_c4h_resolve_dep additionally rewrites
+    # Catch2::Catch2 to Catch2::Catch2WithMain, which supplies main().)
     set_property(GLOBAL PROPERTY C4H_EXT_ARGS_Catch2 "CONFIG")
 endif()
 
 # ---------------------------------------------------------------------------
-# c4h_register_ext_package(NAMESPACE <ns> [PACKAGE <name>] [EXTRA_ARGS <...>])
-#
-# Register or override the find_package() behaviour for a CMake namespace.
-# Only needed for packages where the default rule (find_package(<namespace>
-# REQUIRED)) does not work — i.e., the package name differs from the namespace,
-# or CONFIG / other args are required.
-#
-# NAMESPACE   The namespace prefix appearing before '::' in the CMake target
-#             (e.g. "MyLib" for "MyLib::Core").
-# PACKAGE     Package name passed to find_package(). Defaults to NAMESPACE.
-# EXTRA_ARGS  Arguments appended after REQUIRED (e.g. CONFIG, or version req).
-#
-# Examples:
-#   # Package ships only a CMake config file:
-#   c4h_register_ext_package(NAMESPACE Acts EXTRA_ARGS CONFIG)
-#
-#   # Package name does not match namespace:
-#   c4h_register_ext_package(NAMESPACE SQLite PACKAGE SQLite3)
-# ---------------------------------------------------------------------------
-function(c4h_register_ext_package)
-    cmake_parse_arguments(_REG "" "NAMESPACE;PACKAGE" "EXTRA_ARGS" ${ARGN})
-    if(NOT _REG_NAMESPACE)
-        message(FATAL_ERROR "c4h_register_ext_package: NAMESPACE is required.")
-    endif()
-    if(_REG_PACKAGE)
-        set_property(GLOBAL PROPERTY "C4H_EXT_NAME_${_REG_NAMESPACE}" "${_REG_PACKAGE}")
-    endif()
-    if(_REG_EXTRA_ARGS)
-        string(JOIN " " _extra ${_REG_EXTRA_ARGS})
-        set_property(GLOBAL PROPERTY "C4H_EXT_ARGS_${_REG_NAMESPACE}" "${_extra}")
-    endif()
-endfunction()
-
-# ---------------------------------------------------------------------------
-# Internal: promote a list of imported targets to GLOBAL scope and backfill
-# their INTERFACE_INCLUDE_DIRECTORIES from old-style <pkg>_INCLUDE_DIRS /
-# <pkg>_INCLUDE_DIR variables when the property is absent.
-#
-# Some upstream CMake configs (notably Stitched per-module targets) link
-# correctly but omit INTERFACE_INCLUDE_DIRECTORIES, so consumers never get
-# the necessary -I flags even though the .so links fine.  Reading the
-# old-style variable (always populated by FindXxx.cmake and most config
-# files) and setting it on the target restores transitive header propagation
-# without any surgery on the upstream packages.
-#
-# Call with the package name and the list of NEW target names (i.e. those
-# discovered after the find_package call).
-# ---------------------------------------------------------------------------
-function(_c4h_promote_and_backfill pkg_name new_targets)
-    foreach(_tgt IN LISTS new_targets)
-        if(NOT TARGET "${_tgt}")
-            continue()
-        endif()
-        set_target_properties("${_tgt}" PROPERTIES IMPORTED_GLOBAL TRUE)
-        get_target_property(_iid "${_tgt}" INTERFACE_INCLUDE_DIRECTORIES)
-        if(NOT _iid)
-            # Try the two conventional variable names in order.
-            foreach(_var IN ITEMS
-                    "${pkg_name}_INCLUDE_DIRS"
-                    "${pkg_name}_INCLUDE_DIR")
-                if(${_var})
-                    set_target_properties("${_tgt}"
-                        PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${${_var}}")
-                    break()
-                endif()
-            endforeach()
-        endif()
-    endforeach()
-endfunction()
-
-# ---------------------------------------------------------------------------
-# c4h_backfill_ext_includes(PACKAGE <name> [TARGETS <tgt>...])
-#
-# Public helper for packages found BEFORE the c4h machinery loads (e.g.
-# Stitched in the top-level CMakeLists.txt).  Call it right after
-# find_package() to ensure all imported targets from that package have
-# INTERFACE_INCLUDE_DIRECTORIES populated and are promoted to GLOBAL scope.
-#
-# If TARGETS is omitted, all currently-known IMPORTED_TARGETS in the calling
-# directory are promoted/backfilled — useful as a blanket fix immediately
-# after a top-level find_package.
-# ---------------------------------------------------------------------------
-function(c4h_backfill_ext_includes)
-    cmake_parse_arguments(_BF "" "PACKAGE" "TARGETS" ${ARGN})
-    if(NOT _BF_PACKAGE)
-        message(FATAL_ERROR "c4h_backfill_ext_includes: PACKAGE is required.")
-    endif()
-    if(_BF_TARGETS)
-        set(_tgts "${_BF_TARGETS}")
-    else()
-        get_property(_tgts DIRECTORY PROPERTY IMPORTED_TARGETS)
-    endif()
-    _c4h_promote_and_backfill("${_BF_PACKAGE}" "${_tgts}")
-endfunction()
-
-# ---------------------------------------------------------------------------
 # Internal: call find_package() for the package that provides <namespace>::
 # targets, using the override properties if present, defaulting to
-# find_package(<namespace> REQUIRED).  Idempotent — CMake's find_package
-# caching makes repeated calls free once the package is found.
+# find_package(<namespace> REQUIRED).
+#
+# find_package runs at most once per package: the first c4h_add_* call that
+# references the namespace finds it, and the imported targets are promoted to
+# GLOBAL scope so every sibling package directory can link against them. The
+# once-only guard is required for FindPython3, which errors when re-invoked
+# with COMPONENTS in a nested directory scope.
 # ---------------------------------------------------------------------------
 function(_c4h_auto_find_package namespace)
     get_property(_pkg_name GLOBAL PROPERTY "C4H_EXT_NAME_${namespace}")
     if(NOT _pkg_name)
         set(_pkg_name "${namespace}")
     endif()
-    # Guard: call find_package at most once per resolved package name.
-    # CMake's own idempotency is unreliable for module-mode packages.
     get_property(_already GLOBAL PROPERTY "C4H_EXT_FOUND_${_pkg_name}")
     if(_already)
         return()
     endif()
     set_property(GLOBAL PROPERTY "C4H_EXT_FOUND_${_pkg_name}" TRUE)
-    get_property(_extra GLOBAL PROPERTY "C4H_EXT_ARGS_${namespace}")
 
-    # Snapshot imported targets visible in this directory before the call so
-    # we can promote newly-created ones to GLOBAL scope and backfill their
-    # INTERFACE_INCLUDE_DIRECTORIES from old-style variables when absent.
+    get_property(_extra GLOBAL PROPERTY "C4H_EXT_ARGS_${namespace}")
     get_property(_before DIRECTORY PROPERTY IMPORTED_TARGETS)
     find_package(${_pkg_name} REQUIRED ${_extra})
+    # Promote newly-imported targets to GLOBAL so packages in sibling
+    # directories (found-once elsewhere) can still link them.
     get_property(_after DIRECTORY PROPERTY IMPORTED_TARGETS)
-    set(_new_targets)
     foreach(_tgt IN LISTS _after)
         if(NOT "${_tgt}" IN_LIST _before)
-            list(APPEND _new_targets "${_tgt}")
+            set_target_properties("${_tgt}" PROPERTIES IMPORTED_GLOBAL TRUE)
         endif()
     endforeach()
-    _c4h_promote_and_backfill("${_pkg_name}" "${_new_targets}")
-    message(STATUS "[C4H] ran find_package for ${_pkg_name}")
-    get_property(found_targets DIRECTORY PROPERTY IMPORTED_TARGETS)
-    message(STATUS "[C4H] All available imported targets: ${found_targets}")
 endfunction()
 
 # ---------------------------------------------------------------------------
@@ -243,7 +136,6 @@ function(_c4h_resolve_dep DEP OUT_VAR)
         # Already fully-qualified CMake target.
         # Extract namespace and ensure the providing package is found.
         string(REGEX MATCH "^[^:]+" _ns "${DEP}")
-        message(STATUS "[C4H] trying to resolve dep ${_ns}")
         _c4h_auto_find_package("${_ns}")
         # Catch2::Catch2 has no main(); redirect to the variant that does so
         # test binaries link correctly without a hand-written main().
@@ -315,7 +207,6 @@ endfunction()
 # Sets OUT_VAR in caller scope to the resolved target list.
 # ---------------------------------------------------------------------------
 function(_c4h_resolve_deps DEPS_LIST OUT_VAR)
-    message(STATUS "[C4H] resolve deps: ${DEPS_LIST}")
     set(_resolved)
     foreach(_dep IN LISTS DEPS_LIST)
         _c4h_resolve_dep("${_dep}" _r)
@@ -353,32 +244,24 @@ endfunction()
 # Creates a shared library, installs it and its headers, and wires include
 # paths for both build-tree and install-tree use.
 #
-# PRIVATE_DEPS / EXT_PRIVATE_DEPS: these arguments have no SCRAM equivalent
-# (SCRAM makes no public/private distinction) and will never appear in
-# converter-generated output. Use them when a library uses a dependency only
-# in its .cc files and should not propagate it to consumers.
+#   NAME      Target/library name. Defaults to the directory-derived name.
+#   SOURCES   Source glob patterns. Defaults to src/*.cc.
+#   DEPS      Internal dependencies (shorthand, resolved to CMake targets).
+#   EXT_DEPS  External dependencies (fully-qualified imported targets).
 #
-# Per-target compile flag overrides (USER_CXXFLAGS in SCRAM) are intentionally
-# absent from Code4hepBuild functions. The correct CMake equivalents are:
-#   - Debug symbols + no optimization (equivalent to USER_CXXFLAGS="-g -O0"):
-#     configure with cmake -DCMAKE_BUILD_TYPE=Debug.
-#   - Debug symbols alongside a release build:
-#     configure with cmake -DCMAKE_CXX_FLAGS="-g".
-#   - Per-target flags in the rare case a single package genuinely requires them:
-#     call target_compile_options(<target> PRIVATE -g -O0) directly after
-#     c4h_add_library().
+# All dependencies are linked PUBLIC. For anything beyond this — private
+# linkage, extra include directories, raw -l flags, recursive globs, compile
+# options — call the underlying CMake commands (target_link_libraries,
+# target_include_directories, target_compile_options, …) on the target
+# directly after c4h_add_library(); the target name is NAME or the derived
+# name. Likewise, build a Debug/instrumented variant with
+# cmake -DCMAKE_BUILD_TYPE=Debug rather than per-target flags here.
 # ---------------------------------------------------------------------------
 function(c4h_add_library)
-    cmake_parse_arguments(
-        C4H_LIB
-        "RECURSE_SOURCES;NO_SYMBOL_CHECK;NO_TIDY"
-        "NAME;DICT_HEADER;DICT_XML"
-        "SOURCES;HEADERS;EXCLUDE_SOURCES;DEPS;EXT_DEPS;LINK_LIBS;PRIVATE_DEPS;EXT_PRIVATE_DEPS;INCLUDE_DIRS;INSTALL_SCRIPTS"
-        ${ARGN}
-    )
+    cmake_parse_arguments(C4H_LIB "" "NAME" "SOURCES;DEPS;EXT_DEPS" ${ARGN})
     _c4h_defer_auto_subdirectories()
 
-    # --- Derive or override target name ---
+    # --- Target name: NAME override, else derived from directory path ---
     _c4h_derive_target_name(_auto_target _pkg_path)
     if(C4H_LIB_NAME)
         set(_C4H_TARGET "${C4H_LIB_NAME}")
@@ -386,59 +269,22 @@ function(c4h_add_library)
         set(_C4H_TARGET "${_auto_target}")
     endif()
 
-    # --- Check PROJECT_VERSION ---
-    if(NOT PROJECT_VERSION)
-        message(FATAL_ERROR
-            "c4h_add_library: PROJECT_VERSION is not set. "
-            "Set it in the top-level project() call.")
-    endif()
-
-    # --- Source globbing ---
+    # --- Sources (SOURCES patterns, else src/*.cc) and public headers (*.h) ---
     if(C4H_LIB_SOURCES)
         set(_glob_patterns ${C4H_LIB_SOURCES})
     else()
         set(_glob_patterns "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cc")
     endif()
+    file(GLOB _sources CONFIGURE_DEPENDS ${_glob_patterns})
+    file(GLOB _headers CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.h")
 
-    if(C4H_LIB_RECURSE_SOURCES)
-        file(GLOB_RECURSE _sources ${_glob_patterns})
-    else()
-        file(GLOB _sources ${_glob_patterns})
-    endif()
-
-    # Warn about glob staleness (CMake does not re-configure on file changes)
-    message(AUTHOR_WARNING
-        "Source files may have changed in ${CMAKE_CURRENT_SOURCE_DIR}: re-run cmake")
-
-    # Remove excluded sources
-    if(C4H_LIB_EXCLUDE_SOURCES)
-        foreach(_excl IN LISTS C4H_LIB_EXCLUDE_SOURCES)
-            list(REMOVE_ITEM _sources "${CMAKE_CURRENT_SOURCE_DIR}/${_excl}")
-            list(REMOVE_ITEM _sources "${_excl}")
-        endforeach()
-    endif()
-
-    # --- Header globbing ---
-    if(C4H_LIB_HEADERS)
-        file(GLOB _headers ${C4H_LIB_HEADERS})
-    else()
-        file(GLOB _headers "${CMAKE_CURRENT_SOURCE_DIR}/*.h")
-    endif()
-
-    # --- Create library target ---
     add_library(${_C4H_TARGET} SHARED ${_sources})
 
-    # --- Include directories ---
     target_include_directories(${_C4H_TARGET}
         PUBLIC
             $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}>
             $<INSTALL_INTERFACE:include>
     )
-    if(C4H_LIB_INCLUDE_DIRS)
-        target_include_directories(${_C4H_TARGET} PRIVATE ${C4H_LIB_INCLUDE_DIRS})
-    endif()
-
-    # --- FILE_SET HEADERS (CMake 3.23+) ---
     if(_headers)
         target_sources(${_C4H_TARGET}
             PUBLIC
@@ -448,128 +294,67 @@ function(c4h_add_library)
         )
     endif()
 
-    # --- Dependency resolution and linking ---
-    # EXT_DEPS are fully-qualified CMake targets (e.g. ROOT::Core, podio::podio).
-    # Passing them through _c4h_resolve_deps triggers _c4h_auto_find_package() for
-    # each namespace — the targets themselves pass through unchanged.
-    _c4h_resolve_deps("${C4H_LIB_DEPS}"         _pub_deps)
-    _c4h_resolve_deps("${C4H_LIB_EXT_DEPS}"     _ext_pub_deps)
-    _c4h_resolve_deps("${C4H_LIB_PRIVATE_DEPS}" _priv_deps)
-    _c4h_resolve_deps("${C4H_LIB_EXT_PRIVATE_DEPS}" _ext_priv_deps)
-
+    # --- Dependencies (all PUBLIC). EXT_DEPS are fully-qualified imported
+    # targets; resolving them triggers find_package() for their namespace. ---
+    _c4h_resolve_deps("${C4H_LIB_DEPS}"     _pub_deps)
+    _c4h_resolve_deps("${C4H_LIB_EXT_DEPS}" _ext_pub_deps)
     if(_pub_deps OR _ext_pub_deps)
-        target_link_libraries(${_C4H_TARGET}
-            PUBLIC ${_pub_deps} ${_ext_pub_deps}
-        )
-    endif()
-    if(_priv_deps OR _ext_priv_deps)
-        target_link_libraries(${_C4H_TARGET}
-            PRIVATE ${_priv_deps} ${_ext_priv_deps}
-        )
-    endif()
-    # LINK_LIBS: raw linker libraries passed directly (e.g. converted from
-    # SCRAM's <lib name="mylib"/> which implies -lmylib).  Bypasses dep
-    # resolution — use only for legacy raw-link dependencies with no CMake target.
-    if(C4H_LIB_LINK_LIBS)
-        target_link_libraries(${_C4H_TARGET} PRIVATE ${C4H_LIB_LINK_LIBS})
+        target_link_libraries(${_C4H_TARGET} PUBLIC ${_pub_deps} ${_ext_pub_deps})
     endif()
 
-    # --- Symbol checking: -Wl,--no-undefined (Linux only) ---
-    if(NOT C4H_LIB_NO_SYMBOL_CHECK AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # Fail the link if any symbol is unresolved (Linux).
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         target_link_options(${_C4H_TARGET} PRIVATE "-Wl,--no-undefined")
     endif()
 
-    # --- Version and SOVERSION ---
     string(REGEX MATCH "^[0-9]+" _C4H_MAJOR "${PROJECT_VERSION}")
     set_target_properties(${_C4H_TARGET} PROPERTIES
         VERSION   "${PROJECT_VERSION}"
         SOVERSION "${_C4H_MAJOR}"
     )
 
-    # --- Extension hook: package path property ---
-    set_target_properties(${_C4H_TARGET} PROPERTIES
-        C4H_PACKAGE_PATH "${_pkg_path}"
-    )
-
-    # --- Accumulate global properties ---
-    set_property(GLOBAL APPEND PROPERTY C4H_BUILT_PACKAGES "${_C4H_TARGET}")
     set_property(GLOBAL APPEND PROPERTY C4H_ALL_SOURCES ${_sources})
 
-    # --- Auto-detect ROOT dictionary ---
-    if(C4H_LIB_DICT_HEADER)
-        set(_dict_header "${C4H_LIB_DICT_HEADER}")
-    else()
-        set(_dict_header "src/classes.h")
-    endif()
-    if(C4H_LIB_DICT_XML)
-        set(_dict_xml "${C4H_LIB_DICT_XML}")
-    else()
-        set(_dict_xml "src/classes_def.xml")
-    endif()
-
-    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${_dict_header}" AND
-       EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${_dict_xml}")
-        message(STATUS
-            "c4h: Auto-detected ROOT dictionary for ${_C4H_TARGET} "
-            "(${_dict_header}, ${_dict_xml})")
+    # --- Auto-detect ROOT dictionary (src/classes.h + src/classes_def.xml) ---
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/classes.h" AND
+       EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/classes_def.xml")
+        message(STATUS "c4h: Auto-detected ROOT dictionary for ${_C4H_TARGET}")
         c4h_generate_dictionary(
             TARGET  "${_C4H_TARGET}"
-            HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/${_dict_header}"
-            LINKDEF "${CMAKE_CURRENT_SOURCE_DIR}/${_dict_xml}"
+            HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/src/classes.h"
+            LINKDEF "${CMAKE_CURRENT_SOURCE_DIR}/src/classes_def.xml"
         )
     endif()
 
-    # --- Install scripts ---
-    if(C4H_LIB_INSTALL_SCRIPTS)
-        install(PROGRAMS ${C4H_LIB_INSTALL_SCRIPTS}
-            DESTINATION "${CMAKE_INSTALL_BINDIR}"
-        )
-    endif()
-
-    # --- Install: library + headers + export set ---
     install(TARGETS ${_C4H_TARGET}
         EXPORT  "${PROJECT_NAME}Targets"
         LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
         FILE_SET HEADERS
     )
-
-    # --- clang-tidy suppression ---
-    if(C4H_LIB_NO_TIDY)
-        set_target_properties(${_C4H_TARGET} PROPERTIES CXX_CLANG_TIDY "")
-    endif()
 endfunction()
 
 # ---------------------------------------------------------------------------
 # 2. c4h_add_plugin
 #
 # SCRAM equivalent: <library> with <flags EDM_PLUGIN="1"/>
-# Wraps stitched_generate_plugin. Provides DEPS shorthand resolution,
-# auto-globbing, EXCLUDE_SOURCES, and a NO_CFIPYTHON escape for plugins
-# that do not implement fillDescriptions().
+# Wraps stitched_generate_plugin (edmWriteConfigs, modules.py, python/).
 #
-# NAME is optional. When omitted, the target name is derived from the
-# directory path using the same algorithm as c4h_add_library (e.g.
-# Code4hep/TestModules/plugins → plugin_TestModules_plugins).
-# Supply NAME only when you need to override the auto-derived name.
+#   NAME      Plugin name. Defaults to the directory-derived name; the target
+#             is plugin_<name>.
+#   SOURCES   Source glob patterns. Defaults to *.cc when called from a
+#             plugins/ directory, else plugins/*.cc.
+#   DEPS      Internal dependencies (shorthand).
+#   EXT_DEPS  External dependencies (fully-qualified imported targets).
 #
-# Because all user-defined plugin factories subclass the base PluginFactory
-# class, edmWriteConfigs works uniformly for all plugin types.
-#
-# Per-target compile flag overrides are intentionally absent. See the note
-# in c4h_add_library for the correct CMAKE_BUILD_TYPE-based equivalents.
+# All dependencies are linked PUBLIC (stitched_generate_plugin links them so
+# their include directories propagate). For anything more, operate on the
+# plugin_<name> target directly after this call.
 # ---------------------------------------------------------------------------
 function(c4h_add_plugin)
-    cmake_parse_arguments(
-        C4H_PLG
-        "NO_TIDY;NO_CFIPYTHON"
-        "NAME"
-        "SOURCES;EXCLUDE_SOURCES;DEPS;EXT_DEPS;LINK_LIBS;INCLUDE_DIRS"
-        ${ARGN}
-    )
-
+    cmake_parse_arguments(C4H_PLG "" "NAME" "SOURCES;DEPS;EXT_DEPS" ${ARGN})
     _c4h_defer_auto_subdirectories()
 
-    # --- Derive target name (same algorithm as c4h_add_library) ---
+    # --- Target name: NAME override, else directory-derived ---
     _c4h_derive_target_name(_auto_target _pkg_path)
     if(C4H_PLG_NAME)
         set(_plugin_name "${C4H_PLG_NAME}")
@@ -578,121 +363,51 @@ function(c4h_add_plugin)
     endif()
     set(_target "plugin_${_plugin_name}")
 
-    # --- Source globbing ---
+    # --- Sources: SOURCES patterns, else *.cc (in a plugins/ dir) or plugins/*.cc ---
     if(C4H_PLG_SOURCES)
-        file(GLOB _sources ${C4H_PLG_SOURCES})
+        file(GLOB _sources CONFIGURE_DEPENDS ${C4H_PLG_SOURCES})
     else()
-        # If we are inside a plugins/ directory, glob *.cc; otherwise plugins/*.cc
         get_filename_component(_curdir "${CMAKE_CURRENT_SOURCE_DIR}" NAME)
         if("${_curdir}" STREQUAL "plugins")
-            file(GLOB _sources "${CMAKE_CURRENT_SOURCE_DIR}/*.cc")
+            file(GLOB _sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cc")
         else()
-            file(GLOB _sources "${CMAKE_CURRENT_SOURCE_DIR}/plugins/*.cc")
+            file(GLOB _sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/plugins/*.cc")
         endif()
     endif()
 
-    message(AUTHOR_WARNING
-        "Source files may have changed in ${CMAKE_CURRENT_SOURCE_DIR}: re-run cmake")
-
-    if(C4H_PLG_EXCLUDE_SOURCES)
-        foreach(_excl IN LISTS C4H_PLG_EXCLUDE_SOURCES)
-            list(REMOVE_ITEM _sources "${CMAKE_CURRENT_SOURCE_DIR}/${_excl}")
-            list(REMOVE_ITEM _sources "${_excl}")
-        endforeach()
-    endif()
-
-    # --- Resolve deps (EXT_DEPS pass through unchanged but trigger find_package) ---
     _c4h_resolve_deps("${C4H_PLG_DEPS}"     _resolved_deps)
     _c4h_resolve_deps("${C4H_PLG_EXT_DEPS}" _resolved_ext_deps)
-    set(_all_link_libs ${_resolved_deps} ${_resolved_ext_deps})
 
-    # --- Create plugin target ---
-    if(C4H_PLG_NO_CFIPYTHON)
-        # Manual plugin creation without edmWriteConfigs
-        add_library(${_target} SHARED ${_sources})
-        set_target_properties(${_target} PROPERTIES PREFIX "edmplugin")
-        target_include_directories(${_target}
-            PUBLIC
-                $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}>
-                $<INSTALL_INTERFACE:include>
-        )
-        if(_all_link_libs)
-            target_link_libraries(${_target} PUBLIC ${_all_link_libs})
-        endif()
-        if(C4H_PLG_LINK_LIBS)
-            target_link_libraries(${_target} PRIVATE ${C4H_PLG_LINK_LIBS})
-        endif()
-        install(TARGETS ${_target}
-            LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
-        )
-    else()
-        # Delegate to stitched_generate_plugin (handles edmWriteConfigs,
-        # modules.py installation, and python/ directory handling).
-        # SCRAM equivalent: stitched_generate_plugin macro in StitchedMacros.cmake
-        stitched_generate_plugin(
-            TARGET         "${_target}"
-            SOURCES        ${_sources}
-            LINK_LIBRARIES ${_all_link_libs} ${C4H_PLG_LINK_LIBS}
-        )
-        # stitched_generate_plugin sets LINK_LIBRARIES via a property rather than
-        # target_link_libraries(), so CMake's INTERFACE_INCLUDE_DIRECTORIES
-        # propagation never fires for the plugin target.  Re-linking with an
-        # explicit PRIVATE keyword forces it without changing the link list
-        # (CMake deduplicates).
-        if(_all_link_libs)
-            target_link_libraries(${_target} PRIVATE ${_all_link_libs})
-        endif()
-        if(C4H_PLG_LINK_LIBS)
-            target_link_libraries(${_target} PRIVATE ${C4H_PLG_LINK_LIBS})
-        endif()
-    endif()
-
-    # --- Include directories (applies to both code paths) ---
-    # Add CMAKE_SOURCE_DIR so in-tree headers (e.g. Code4hep/Foo/Bar.h) are
-    # found with the same include path as they are in c4h_add_library.
-    target_include_directories(${_target} PRIVATE
-        $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}>
+    # Delegate to Stitched. It adds $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}> and
+    # links the libraries PUBLIC, so include dirs propagate without extra work.
+    stitched_generate_plugin(
+        TARGET         "${_target}"
+        SOURCES        ${_sources}
+        LINK_LIBRARIES ${_resolved_deps} ${_resolved_ext_deps}
     )
-    if(C4H_PLG_INCLUDE_DIRS)
-        target_include_directories(${_target} PRIVATE ${C4H_PLG_INCLUDE_DIRS})
-    endif()
-    # --- Redirect output to the shared plugin directory ---
-    # edmPluginRefresh requires all plugin .so files in one directory.
+
+    # All plugin .so files must share one directory for edmPluginRefresh.
     set_target_properties(${_target} PROPERTIES
         LIBRARY_OUTPUT_DIRECTORY "${C4H_PLUGIN_OUTPUT_DIR}"
     )
 
-    # --- Extension hook properties ---
-    set_target_properties(${_target} PROPERTIES
-        C4H_IS_PLUGIN   TRUE
-        C4H_PACKAGE_PATH "${_pkg_path}"
-    )
-
-    # --- Accumulate global properties ---
     set_property(GLOBAL APPEND PROPERTY C4H_PLUGIN_TARGETS "${_target}")
     set_property(GLOBAL APPEND PROPERTY C4H_ALL_SOURCES ${_sources})
-
-    # --- clang-tidy suppression ---
-    if(C4H_PLG_NO_TIDY)
-        set_target_properties(${_target} PROPERTIES CXX_CLANG_TIDY "")
-    endif()
 endfunction()
 
 # ---------------------------------------------------------------------------
 # 3. c4h_add_executable
 #
 # SCRAM equivalent: <bin name="..." file="...">
-# Builds and installs a binary executable.
-# Distinct from c4h_add_test_binary (which builds but does not install).
+# Builds and installs a binary executable (target bin_<name>).
+#
+#   NAME      Executable name (required).
+#   SOURCES   Source glob patterns. Defaults to bin/<name>.cc, else bin/*.cc.
+#   DEPS      Internal dependencies (shorthand).
+#   EXT_DEPS  External dependencies (fully-qualified imported targets).
 # ---------------------------------------------------------------------------
 function(c4h_add_executable)
-    cmake_parse_arguments(
-        C4H_EXE
-        ""
-        "NAME"
-        "SOURCES;EXCLUDE_SOURCES;DEPS;EXT_DEPS;LINK_LIBS;INCLUDE_DIRS;INSTALL_SCRIPTS"
-        ${ARGN}
-    )
+    cmake_parse_arguments(C4H_EXE "" "NAME" "SOURCES;DEPS;EXT_DEPS" ${ARGN})
     _c4h_defer_auto_subdirectories()
 
     if(NOT C4H_EXE_NAME)
@@ -701,54 +416,30 @@ function(c4h_add_executable)
 
     set(_target "bin_${C4H_EXE_NAME}")
 
-    # --- Source globbing ---
+    # --- Sources: SOURCES patterns, else bin/<name>.cc, else bin/*.cc ---
     if(C4H_EXE_SOURCES)
-        file(GLOB _sources ${C4H_EXE_SOURCES})
+        file(GLOB _sources CONFIGURE_DEPENDS ${C4H_EXE_SOURCES})
     elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/bin/${C4H_EXE_NAME}.cc")
         set(_sources "${CMAKE_CURRENT_SOURCE_DIR}/bin/${C4H_EXE_NAME}.cc")
     else()
-        file(GLOB _sources "${CMAKE_CURRENT_SOURCE_DIR}/bin/*.cc")
-    endif()
-
-    message(AUTHOR_WARNING
-        "Source files may have changed in ${CMAKE_CURRENT_SOURCE_DIR}: re-run cmake")
-
-    if(C4H_EXE_EXCLUDE_SOURCES)
-        foreach(_excl IN LISTS C4H_EXE_EXCLUDE_SOURCES)
-            list(REMOVE_ITEM _sources "${CMAKE_CURRENT_SOURCE_DIR}/${_excl}")
-            list(REMOVE_ITEM _sources "${_excl}")
-        endforeach()
+        file(GLOB _sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/bin/*.cc")
     endif()
 
     add_executable(${_target} ${_sources})
-
     target_include_directories(${_target} PRIVATE
         $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}>
     )
-    if(C4H_EXE_INCLUDE_DIRS)
-        target_include_directories(${_target} PRIVATE ${C4H_EXE_INCLUDE_DIRS})
-    endif()
 
     _c4h_resolve_deps("${C4H_EXE_DEPS}"     _resolved_deps)
     _c4h_resolve_deps("${C4H_EXE_EXT_DEPS}" _resolved_ext_deps)
-    set(_link_libs ${_resolved_deps} ${_resolved_ext_deps})
-    if(_link_libs)
-        target_link_libraries(${_target} PRIVATE ${_link_libs})
-    endif()
-    if(C4H_EXE_LINK_LIBS)
-        target_link_libraries(${_target} PRIVATE ${C4H_EXE_LINK_LIBS})
+    if(_resolved_deps OR _resolved_ext_deps)
+        target_link_libraries(${_target} PRIVATE ${_resolved_deps} ${_resolved_ext_deps})
     endif()
 
     install(TARGETS ${_target}
         EXPORT  "${PROJECT_NAME}Targets"
         RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
     )
-
-    if(C4H_EXE_INSTALL_SCRIPTS)
-        install(PROGRAMS ${C4H_EXE_INSTALL_SCRIPTS}
-            DESTINATION "${CMAKE_INSTALL_BINDIR}"
-        )
-    endif()
 endfunction()
 
 # ---------------------------------------------------------------------------
@@ -761,14 +452,6 @@ endfunction()
 # Call once in the top-level CMakeLists.txt after all add_subdirectory() calls.
 # ---------------------------------------------------------------------------
 function(c4h_generate_plugincache)
-    cmake_parse_arguments(
-        C4H_PC
-        ""
-        "OUTPUT_DIR;TARGET_NAME"
-        ""
-        ${ARGN}
-    )
-
     get_property(_plugin_targets GLOBAL PROPERTY C4H_PLUGIN_TARGETS)
     if(NOT _plugin_targets)
         message(FATAL_ERROR
@@ -776,46 +459,29 @@ function(c4h_generate_plugincache)
             "Ensure c4h_add_plugin() has been called before this function.")
     endif()
 
-    # OUTPUT_DIR: where the .edmplugincache file is written and where
-    # edmPluginRefresh looks for the plugin .so files.  Must match the
-    # LIBRARY_OUTPUT_DIRECTORY set on each plugin target.
-    if(C4H_PC_OUTPUT_DIR)
-        set(_plugin_out_dir "${C4H_PC_OUTPUT_DIR}")
-    else()
-        set(_plugin_out_dir "${C4H_PLUGIN_OUTPUT_DIR}")
-    endif()
-
-    set(_args PLUGIN_TARGETS ${_plugin_targets} OUTPUT_DIR "${_plugin_out_dir}")
-
-    if(C4H_PC_TARGET_NAME)
-        list(APPEND _args CACHE_TARGET_NAME "${C4H_PC_TARGET_NAME}")
-    else()
-        list(APPEND _args CACHE_TARGET_NAME "RefreshPluginCache")
-    endif()
-
-    # Delegates to Stitched: stitched_generate_plugincache in StitchedMacros.cmake
-    stitched_generate_plugincache(${_args})
+    # Delegates to Stitched: stitched_generate_plugincache in StitchedMacros.cmake.
+    # The output directory must match the plugins' LIBRARY_OUTPUT_DIRECTORY.
+    stitched_generate_plugincache(
+        PLUGIN_TARGETS    ${_plugin_targets}
+        OUTPUT_DIR        "${C4H_PLUGIN_OUTPUT_DIR}"
+        CACHE_TARGET_NAME "RefreshPluginCache"
+    )
 endfunction()
 
 # ---------------------------------------------------------------------------
 # 5. c4h_add_test
 #
 # SCRAM equivalent: <test name="..." command="...">
-# Registers a script-based test with CTest.
+# Registers a script-based test with CTest, run from the current source
+# directory.
 #
-# NOTE: SCRAM's SETENV_SCRIPT (sourcing a shell script before the test) has
-# no clean CTest equivalent and is intentionally unsupported. Tests that
-# relied on SETENV_SCRIPT must be refactored to pass required values as
-# explicit ENVIRONMENT entries or to bake them into the test command.
+#   NAME     Test name (required).
+#   COMMAND  Command to run (required). ${LOCALTOP} expands to CMAKE_SOURCE_DIR.
+#   DEPS     Internal dependencies whose build directories are prepended to
+#            LD_LIBRARY_PATH so the test finds in-tree libraries at runtime.
 # ---------------------------------------------------------------------------
 function(c4h_add_test)
-    cmake_parse_arguments(
-        C4H_TST
-        ""
-        "NAME;WORKING_DIRECTORY"
-        "COMMAND;DEPS;ENVIRONMENT;DEPENDS"
-        ${ARGN}
-    )
+    cmake_parse_arguments(C4H_TST "" "NAME" "COMMAND;DEPS" ${ARGN})
 
     if(NOT C4H_TST_NAME)
         message(FATAL_ERROR "c4h_add_test: NAME is required.")
@@ -831,13 +497,12 @@ function(c4h_add_test)
         list(APPEND _cmd "${_tok}")
     endforeach()
 
-    if(C4H_TST_WORKING_DIRECTORY)
-        set(_workdir "${C4H_TST_WORKING_DIRECTORY}")
-    else()
-        set(_workdir "${CMAKE_CURRENT_SOURCE_DIR}")
-    endif()
+    add_test(NAME "${C4H_TST_NAME}"
+        COMMAND ${_cmd}
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    )
 
-    # Resolve deps and collect library dirs for LD_LIBRARY_PATH
+    # Prepend dependency build directories to LD_LIBRARY_PATH.
     _c4h_resolve_deps("${C4H_TST_DEPS}" _resolved_deps)
     set(_lib_dirs)
     foreach(_dep IN LISTS _resolved_deps)
@@ -845,169 +510,19 @@ function(c4h_add_test)
             list(APPEND _lib_dirs "$<TARGET_FILE_DIR:${_dep}>")
         endif()
     endforeach()
-
-    add_test(NAME "${C4H_TST_NAME}"
-        COMMAND ${_cmd}
-        WORKING_DIRECTORY "${_workdir}"
-    )
-
-    # Build ENVIRONMENT property
-    set(_env_list)
     if(_lib_dirs)
-        if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-            set(_ld_var "DYLD_LIBRARY_PATH")
-        else()
-            set(_ld_var "LD_LIBRARY_PATH")
-        endif()
         string(JOIN ":" _lib_path_str ${_lib_dirs})
-        list(APPEND _env_list "${_ld_var}=${_lib_path_str}:\$ENV{${_ld_var}}")
-    endif()
-    foreach(_kv IN LISTS C4H_TST_ENVIRONMENT)
-        list(APPEND _env_list "${_kv}")
-    endforeach()
-
-    if(_env_list)
         set_tests_properties("${C4H_TST_NAME}" PROPERTIES
-            ENVIRONMENT "${_env_list}"
-        )
+            ENVIRONMENT "LD_LIBRARY_PATH=${_lib_path_str}:\$ENV{LD_LIBRARY_PATH}")
     endif()
 
-    if(C4H_TST_DEPENDS)
-        set_tests_properties("${C4H_TST_NAME}" PROPERTIES
-            DEPENDS "${C4H_TST_DEPENDS}"
-        )
-    endif()
-
-    # Package label for ctest -L filtering
+    # Package label for `ctest -L`.
     _c4h_derive_target_name(_auto _pkg_path)
-    set_tests_properties("${C4H_TST_NAME}" PROPERTIES
-        LABELS "${_pkg_path}"
-    )
+    set_tests_properties("${C4H_TST_NAME}" PROPERTIES LABELS "${_pkg_path}")
 endfunction()
 
 # ---------------------------------------------------------------------------
-# 6. c4h_add_test_binary
-#
-# SCRAM equivalent: <test> with a C++ executable source.
-# Builds a C++ test executable and optionally registers it with CTest.
-# Binary is NOT installed; not added to export set.
-#
-# BUILD_ONLY: build but do not register as a CTest test (SCRAM: NO_TESTRUN=1)
-# ---------------------------------------------------------------------------
-function(c4h_add_test_binary)
-    cmake_parse_arguments(
-        C4H_TB
-        "BUILD_ONLY"
-        "NAME;WORKING_DIRECTORY"
-        "SOURCES;EXCLUDE_SOURCES;DEPS;EXT_DEPS;LINK_LIBS;ENVIRONMENT;DEPENDS;COMMAND"
-        ${ARGN}
-    )
-    _c4h_defer_auto_subdirectories()
-
-    if(NOT C4H_TB_NAME)
-        message(FATAL_ERROR "c4h_add_test_binary: NAME is required.")
-    endif()
-
-    set(_target "test_${C4H_TB_NAME}")
-
-    # --- Source globbing ---
-    if(C4H_TB_SOURCES)
-        file(GLOB _sources ${C4H_TB_SOURCES})
-    elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test/${C4H_TB_NAME}.cc")
-        set(_sources "${CMAKE_CURRENT_SOURCE_DIR}/test/${C4H_TB_NAME}.cc")
-    else()
-        file(GLOB _sources "${CMAKE_CURRENT_SOURCE_DIR}/test/*.cc")
-    endif()
-
-    message(AUTHOR_WARNING
-        "Source files may have changed in ${CMAKE_CURRENT_SOURCE_DIR}: re-run cmake")
-
-    if(C4H_TB_EXCLUDE_SOURCES)
-        foreach(_excl IN LISTS C4H_TB_EXCLUDE_SOURCES)
-            list(REMOVE_ITEM _sources "${CMAKE_CURRENT_SOURCE_DIR}/${_excl}")
-            list(REMOVE_ITEM _sources "${_excl}")
-        endforeach()
-    endif()
-
-    add_executable(${_target} ${_sources})
-    # Exclude from default install target
-    set_target_properties(${_target} PROPERTIES EXCLUDE_FROM_ALL TRUE)
-
-    target_include_directories(${_target} PRIVATE
-        $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}>
-    )
-
-    _c4h_resolve_deps("${C4H_TB_DEPS}"     _resolved_deps)
-    _c4h_resolve_deps("${C4H_TB_EXT_DEPS}" _resolved_ext_deps)
-    set(_link_libs ${_resolved_deps} ${_resolved_ext_deps})
-    if(_link_libs)
-        target_link_libraries(${_target} PRIVATE ${_link_libs})
-    endif()
-    if(C4H_TB_LINK_LIBS)
-        target_link_libraries(${_target} PRIVATE ${C4H_TB_LINK_LIBS})
-    endif()
-
-    if(NOT C4H_TB_BUILD_ONLY)
-        if(C4H_TB_COMMAND)
-            set(_cmd ${C4H_TB_COMMAND})
-        else()
-            set(_cmd "$<TARGET_FILE:${_target}>")
-        endif()
-
-        if(C4H_TB_WORKING_DIRECTORY)
-            set(_workdir "${C4H_TB_WORKING_DIRECTORY}")
-        else()
-            set(_workdir "${CMAKE_CURRENT_SOURCE_DIR}")
-        endif()
-
-        add_test(NAME "${C4H_TB_NAME}"
-            COMMAND ${_cmd}
-            WORKING_DIRECTORY "${_workdir}"
-        )
-
-        # Library path environment
-        set(_lib_dirs)
-        foreach(_dep IN LISTS _resolved_deps)
-            if(TARGET "${_dep}")
-                list(APPEND _lib_dirs "$<TARGET_FILE_DIR:${_dep}>")
-            endif()
-        endforeach()
-
-        set(_env_list)
-        if(_lib_dirs)
-            if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-                set(_ld_var "DYLD_LIBRARY_PATH")
-            else()
-                set(_ld_var "LD_LIBRARY_PATH")
-            endif()
-            string(JOIN ":" _lib_path_str ${_lib_dirs})
-            list(APPEND _env_list "${_ld_var}=${_lib_path_str}:\$ENV{${_ld_var}}")
-        endif()
-        foreach(_kv IN LISTS C4H_TB_ENVIRONMENT)
-            list(APPEND _env_list "${_kv}")
-        endforeach()
-
-        if(_env_list)
-            set_tests_properties("${C4H_TB_NAME}" PROPERTIES
-                ENVIRONMENT "${_env_list}"
-            )
-        endif()
-
-        if(C4H_TB_DEPENDS)
-            set_tests_properties("${C4H_TB_NAME}" PROPERTIES
-                DEPENDS "${C4H_TB_DEPENDS}"
-            )
-        endif()
-
-        _c4h_derive_target_name(_auto _pkg_path)
-        set_tests_properties("${C4H_TB_NAME}" PROPERTIES
-            LABELS "${_pkg_path}"
-        )
-    endif()
-endfunction()
-
-# ---------------------------------------------------------------------------
-# 7. c4h_generate_dictionary (internal helper, also callable directly)
+# 6. c4h_generate_dictionary (internal helper, also callable directly)
 #
 # SCRAM equivalent: <flags LCG_DICT_HEADER="..." LCG_DICT_XML="..."/>
 # Wraps stitched_generate_dictionary (StitchedMacros.cmake).
@@ -1015,22 +530,10 @@ endfunction()
 # May also be called explicitly for packages needing multiple dictionaries.
 # ---------------------------------------------------------------------------
 function(c4h_generate_dictionary)
-    cmake_parse_arguments(
-        C4H_DICT
-        ""
-        "TARGET;HEADERS;LINKDEF"
-        "OPTIONS"
-        ${ARGN}
-    )
+    cmake_parse_arguments(C4H_DICT "" "TARGET;HEADERS;LINKDEF" "" ${ARGN})
 
     if(NOT C4H_DICT_TARGET)
         message(FATAL_ERROR "c4h_generate_dictionary: TARGET is required.")
-    endif()
-
-    if(NOT ROOT_FOUND)
-        message(FATAL_ERROR
-            "c4h_generate_dictionary: ROOT was not found. "
-            "Add find_package(ROOT REQUIRED) before calling this function.")
     endif()
 
     if(NOT C4H_DICT_HEADERS)
@@ -1046,7 +549,7 @@ function(c4h_generate_dictionary)
         "${C4H_DICT_HEADERS}"
         LINKDEF "${C4H_DICT_LINKDEF}"
         MODULE  "${C4H_DICT_TARGET}"
-        OPTIONS --reflex ${C4H_DICT_OPTIONS}
+        OPTIONS --reflex
     )
 endfunction()
 
@@ -1069,9 +572,8 @@ endfunction()
 # EXCLUDE: directory names (not paths) to skip.  An explicit call with EXCLUDE
 #          takes precedence over the automatically deferred call.
 #
-# Like source globbing, this relies on a glob at configure time and will not
-# pick up new subdirectories without a cmake re-run.  The staleness warning
-# is emitted to make this visible.
+# Like source globbing, this uses a CONFIGURE_DEPENDS glob so CMake re-runs
+# automatically when the directory's child list changes.
 # ---------------------------------------------------------------------------
 function(c4h_auto_subdirectories)
     cmake_parse_arguments(C4H_ASD "" "" "EXCLUDE" ${ARGN})
@@ -1089,12 +591,10 @@ function(c4h_auto_subdirectories)
 
     file(GLOB _children
         LIST_DIRECTORIES true
+        CONFIGURE_DEPENDS
         RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
         "${CMAKE_CURRENT_SOURCE_DIR}/*"
     )
-
-    message(AUTHOR_WARNING
-        "Subdirectory list may have changed in ${CMAKE_CURRENT_SOURCE_DIR}: re-run cmake")
 
     foreach(_child IN LISTS _children)
         if(IS_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/${_child}")

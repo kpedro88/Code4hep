@@ -23,3 +23,7 @@ __init__.py
 # log files
 *.log
 
+
+# local build directory
+build_Code4hep/
+rebuild.sh
