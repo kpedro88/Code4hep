@@ -24,11 +24,6 @@ include("${CMAKE_CURRENT_LIST_DIR}/Code4hepBuildFunctions.cmake")
 # Load the installed Code4hep targets (libraries, executables).
 include("${CMAKE_CURRENT_LIST_DIR}/Code4hepTargets.cmake")
 
-# Backfill INTERFACE_INCLUDE_DIRECTORIES on any upstream targets whose
-# CMake config omits that property (Stitched per-module targets, etc.).
-c4h_backfill_ext_includes(PACKAGE pybind11)
-c4h_backfill_ext_includes(PACKAGE stitched)
-
 # Register upstreams for DEPS shorthand resolution:
 #   FWCore/Utilities  -> stitched::stitched_FWCore_Utilities  (or Stitched::FWCore_Utilities)
 #   Code4hep/PodioUtilities -> code4hep::PodioUtilities  (installed)
