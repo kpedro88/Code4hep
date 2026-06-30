@@ -10,5 +10,5 @@ c4h_add_library(
         Python3::Python
 )
 
-# Subdirectories with their own CMakeLists.txt are picked up automatically.
+# Descend into child package directories (one add_subdirectory each).
 c4h_auto_subdirectories()
