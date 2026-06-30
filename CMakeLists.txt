@@ -15,6 +15,8 @@ include(CMakePackageConfigHelpers)
 
 # Load the Code4hep build-helper functions (in-tree use).
 # Downstream repos get these via find_package(Code4hep REQUIRED).
+# These c4h_* functions are OPTIONAL convenience wrappers over plain CMake;
+# when to use them vs standard CMake is documented in docs/cmake-conventions.md.
 include("${CMAKE_SOURCE_DIR}/cmake/Code4hepBuildFunctions.cmake")
 
 # Register Code4hep itself so that DEPS like Code4hep/PodioUtilities resolve

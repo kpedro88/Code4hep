@@ -6,6 +6,12 @@
 # Downstream packages get these functions automatically via:
 #   find_package(Code4hep REQUIRED)
 #
+# THESE FUNCTIONS ARE OPTIONAL. Plain CMake (add_library, target_link_libraries,
+# install, …) is always first-class and interoperates with them — the c4h_*
+# helpers simply expand to standard CMake and emit standard targets. Each
+# function's header below shows its exact "≡ PLAIN CMAKE" expansion. For when to
+# use the helpers vs plain CMake, see docs/cmake-conventions.md.
+#
 # CMake minimum version: 3.23 (required for FILE_SET HEADERS).
 
 cmake_minimum_required(VERSION 3.23)
@@ -216,27 +222,7 @@ function(_c4h_resolve_deps DEPS_LIST OUT_VAR)
 endfunction()
 
 # ---------------------------------------------------------------------------
-# Internal helper: schedule c4h_auto_subdirectories() to run at the end of
-# the CALLING directory's scope (not the function scope).
-#
-# Idempotent — the first c4h_add_* call in a CMakeLists.txt registers the
-# deferred scan; subsequent calls in the same file are no-ops.
-#
-# Requires CMake 3.19+ (cmake_language DEFER), which is satisfied by the
-# project's minimum of 3.23.
-# ---------------------------------------------------------------------------
-function(_c4h_defer_auto_subdirectories)
-    get_property(_scheduled DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-                 PROPERTY _C4H_AUTO_SUBDIRS_SCHEDULED)
-    if(NOT _scheduled)
-        set_property(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-                     PROPERTY _C4H_AUTO_SUBDIRS_SCHEDULED TRUE)
-        cmake_language(DEFER CALL c4h_auto_subdirectories)
-    endif()
-endfunction()
-
-# ---------------------------------------------------------------------------
-# 1. c4h_add_library
+# 1. c4h_add_library  (OPTIONAL convenience — see docs/cmake-conventions.md)
 #
 # SCRAM equivalent: top-level <use> + <export><lib name="1"/>
 # or named <library file="..."> blocks that are not plugins.
@@ -249,17 +235,42 @@ endfunction()
 #   DEPS      Internal dependencies (shorthand, resolved to CMake targets).
 #   EXT_DEPS  External dependencies (fully-qualified imported targets).
 #
-# All dependencies are linked PUBLIC. For anything beyond this — private
-# linkage, extra include directories, raw -l flags, recursive globs, compile
-# options — call the underlying CMake commands (target_link_libraries,
-# target_include_directories, target_compile_options, …) on the target
-# directly after c4h_add_library(); the target name is NAME or the derived
-# name. Likewise, build a Debug/instrumented variant with
+# ≡ PLAIN CMAKE. This wrapper is not required; you may write the equivalent by
+# hand and it interoperates fully. For a package in Code4hep/DataFormats with
+#
+#   c4h_add_library(DEPS FWCore/Common EXT_DEPS podio::podio)
+#
+# the wrapper expands to exactly:
+#
+#   find_package(podio REQUIRED CONFIG)            # [*] triggered by podio:: namespace
+#   file(GLOB _srcs CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cc)
+#   file(GLOB _hdrs CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/*.h)
+#   add_library(DataFormats SHARED ${_srcs})       # name derived from directory
+#   target_include_directories(DataFormats PUBLIC
+#       $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}> $<INSTALL_INTERFACE:include>)
+#   target_sources(DataFormats PUBLIC FILE_SET HEADERS
+#       BASE_DIRS ${CMAKE_SOURCE_DIR} FILES ${_hdrs})
+#   target_link_libraries(DataFormats PUBLIC
+#       Stitched::stitched_FWCore_Common podio::podio)   # [*] DEPS shorthand resolved
+#   target_link_options(DataFormats PRIVATE -Wl,--no-undefined)   # Linux
+#   set_target_properties(DataFormats PROPERTIES
+#       VERSION ${PROJECT_VERSION} SOVERSION <major>)
+#   install(TARGETS DataFormats EXPORT ${PROJECT_NAME}Targets
+#       LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} FILE_SET HEADERS)
+#   # plus: if src/classes.h + src/classes_def.xml exist, a ROOT dictionary.
+#
+# The only two non-standard pieces are marked [*]: the DEPS "Subsystem/Package"
+# shorthand and find_package() auto-triggered by an EXT_DEPS namespace. Both are
+# explained in docs/cmake-conventions.md. Everything else is verbatim CMake.
+#
+# Need more than this (PRIVATE deps, extra include dirs, raw -l flags, recursive
+# globs, per-target compile options, a STATIC/OBJECT/INTERFACE library)? Either
+# call target_*() on the target after c4h_add_library(), or just write plain
+# add_library() — both are fully supported. For a Debug build use
 # cmake -DCMAKE_BUILD_TYPE=Debug rather than per-target flags here.
 # ---------------------------------------------------------------------------
 function(c4h_add_library)
     cmake_parse_arguments(C4H_LIB "" "NAME" "SOURCES;DEPS;EXT_DEPS" ${ARGN})
-    _c4h_defer_auto_subdirectories()
 
     # --- Target name: NAME override, else derived from directory path ---
     _c4h_derive_target_name(_auto_target _pkg_path)
@@ -334,7 +345,7 @@ function(c4h_add_library)
 endfunction()
 
 # ---------------------------------------------------------------------------
-# 2. c4h_add_plugin
+# 2. c4h_add_plugin  (OPTIONAL convenience — see docs/cmake-conventions.md)
 #
 # SCRAM equivalent: <library> with <flags EDM_PLUGIN="1"/>
 # Wraps stitched_generate_plugin (edmWriteConfigs, modules.py, python/).
@@ -346,13 +357,26 @@ endfunction()
 #   DEPS      Internal dependencies (shorthand).
 #   EXT_DEPS  External dependencies (fully-qualified imported targets).
 #
-# All dependencies are linked PUBLIC (stitched_generate_plugin links them so
-# their include directories propagate). For anything more, operate on the
-# plugin_<name> target directly after this call.
+# ≡ PLAIN CMAKE. For a plugins/ directory with
+#
+#   c4h_add_plugin(NAME Foo DEPS FWCore/Framework EXT_DEPS podio::podio)
+#
+# the wrapper expands to:
+#
+#   find_package(podio REQUIRED CONFIG)            # [*] triggered by podio:: namespace
+#   file(GLOB _srcs CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/*.cc)
+#   stitched_generate_plugin(TARGET plugin_Foo SOURCES ${_srcs}
+#       LINK_LIBRARIES Stitched::stitched_FWCore_Framework podio::podio)  # [*] DEPS resolved
+#   set_target_properties(plugin_Foo PROPERTIES
+#       LIBRARY_OUTPUT_DIRECTORY ${C4H_PLUGIN_OUTPUT_DIR})
+#
+# stitched_generate_plugin (in Stitched's StitchedMacros.cmake) is the part that
+# makes this a "plugin": it sets the edmplugin prefix, runs edmWriteConfigs, and
+# installs modules.py/python. The [*] lines are the same two non-standard pieces
+# as c4h_add_library. For more control, operate on plugin_<name> after this call.
 # ---------------------------------------------------------------------------
 function(c4h_add_plugin)
     cmake_parse_arguments(C4H_PLG "" "NAME" "SOURCES;DEPS;EXT_DEPS" ${ARGN})
-    _c4h_defer_auto_subdirectories()
 
     # --- Target name: NAME override, else directory-derived ---
     _c4h_derive_target_name(_auto_target _pkg_path)
@@ -396,7 +420,7 @@ function(c4h_add_plugin)
 endfunction()
 
 # ---------------------------------------------------------------------------
-# 3. c4h_add_executable
+# 3. c4h_add_executable  (OPTIONAL convenience — see docs/cmake-conventions.md)
 #
 # SCRAM equivalent: <bin name="..." file="...">
 # Builds and installs a binary executable (target bin_<name>).
@@ -405,10 +429,21 @@ endfunction()
 #   SOURCES   Source glob patterns. Defaults to bin/<name>.cc, else bin/*.cc.
 #   DEPS      Internal dependencies (shorthand).
 #   EXT_DEPS  External dependencies (fully-qualified imported targets).
+#
+# ≡ PLAIN CMAKE. c4h_add_executable(NAME foo DEPS Code4hep/PodioUtilities)
+# expands to:
+#
+#   set(_srcs ${CMAKE_CURRENT_SOURCE_DIR}/bin/foo.cc)   # or a glob of bin/*.cc
+#   add_executable(bin_foo ${_srcs})
+#   target_include_directories(bin_foo PRIVATE $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}>)
+#   target_link_libraries(bin_foo PRIVATE Code4hep::PodioUtilities)  # [*] DEPS resolved
+#   install(TARGETS bin_foo EXPORT ${PROJECT_NAME}Targets
+#       RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+#
+# [*] = the DEPS shorthand / EXT_DEPS find_package() conventions; see the guide.
 # ---------------------------------------------------------------------------
 function(c4h_add_executable)
     cmake_parse_arguments(C4H_EXE "" "NAME" "SOURCES;DEPS;EXT_DEPS" ${ARGN})
-    _c4h_defer_auto_subdirectories()
 
     if(NOT C4H_EXE_NAME)
         message(FATAL_ERROR "c4h_add_executable: NAME is required.")
@@ -443,13 +478,24 @@ function(c4h_add_executable)
 endfunction()
 
 # ---------------------------------------------------------------------------
-# 4. c4h_generate_plugincache
+# 4. c4h_generate_plugincache  (OPTIONAL convenience)
 #
 # Wraps stitched_generate_plugincache (StitchedMacros.cmake).
 # Automatically uses the C4H_PLUGIN_TARGETS global property accumulated by
 # all c4h_add_plugin calls — no manual enumeration needed.
 #
 # Call once in the top-level CMakeLists.txt after all add_subdirectory() calls.
+#
+# ≡ PLAIN CMAKE. Equivalent to calling stitched_generate_plugincache() yourself
+# with the explicit list of every plugin target:
+#
+#   stitched_generate_plugincache(
+#       PLUGIN_TARGETS plugin_Foo plugin_Bar ...   # all plugins, listed by hand
+#       OUTPUT_DIR ${C4H_PLUGIN_OUTPUT_DIR}
+#       CACHE_TARGET_NAME RefreshPluginCache)
+#
+# The only thing the wrapper adds is collecting that list automatically (via the
+# C4H_PLUGIN_TARGETS global property that c4h_add_plugin appends to).
 # ---------------------------------------------------------------------------
 function(c4h_generate_plugincache)
     get_property(_plugin_targets GLOBAL PROPERTY C4H_PLUGIN_TARGETS)
@@ -469,7 +515,7 @@ function(c4h_generate_plugincache)
 endfunction()
 
 # ---------------------------------------------------------------------------
-# 5. c4h_add_test
+# 5. c4h_add_test  (OPTIONAL convenience)
 #
 # SCRAM equivalent: <test name="..." command="...">
 # Registers a script-based test with CTest, run from the current source
@@ -479,6 +525,17 @@ endfunction()
 #   COMMAND  Command to run (required). ${LOCALTOP} expands to CMAKE_SOURCE_DIR.
 #   DEPS     Internal dependencies whose build directories are prepended to
 #            LD_LIBRARY_PATH so the test finds in-tree libraries at runtime.
+#
+# ≡ PLAIN CMAKE. c4h_add_test(NAME t COMMAND run.sh DEPS Code4hep/PodioUtilities)
+# expands to:
+#
+#   add_test(NAME t COMMAND run.sh WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+#   set_tests_properties(t PROPERTIES
+#       ENVIRONMENT "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:Code4hep::PodioUtilities>:$ENV{LD_LIBRARY_PATH}"
+#       LABELS "<package-path>")
+#
+# The wrapper only resolves the DEPS shorthand and assembles the LD_LIBRARY_PATH
+# and LABELS strings for you.
 # ---------------------------------------------------------------------------
 function(c4h_add_test)
     cmake_parse_arguments(C4H_TST "" "NAME" "COMMAND;DEPS" ${ARGN})
@@ -526,8 +583,19 @@ endfunction()
 #
 # SCRAM equivalent: <flags LCG_DICT_HEADER="..." LCG_DICT_XML="..."/>
 # Wraps stitched_generate_dictionary (StitchedMacros.cmake).
-# Called automatically by c4h_add_library when dict files are detected.
-# May also be called explicitly for packages needing multiple dictionaries.
+# Called automatically by c4h_add_library when src/classes.h + src/classes_def.xml
+# are present. May also be called explicitly for packages needing multiple
+# dictionaries.
+#
+# ≡ PLAIN CMAKE. c4h_generate_dictionary(TARGET Foo) expands to:
+#
+#   stitched_generate_dictionary(Foo_dict
+#       ${CMAKE_CURRENT_SOURCE_DIR}/src/classes.h          # HEADERS default
+#       LINKDEF ${CMAKE_CURRENT_SOURCE_DIR}/src/classes_def.xml
+#       MODULE Foo OPTIONS --reflex)
+#
+# i.e. it just supplies the conventional default header/LinkDef paths and the
+# _dict naming to Stitched's macro.
 # ---------------------------------------------------------------------------
 function(c4h_generate_dictionary)
     cmake_parse_arguments(C4H_DICT "" "TARGET;HEADERS;LINKDEF" "" ${ARGN})
@@ -556,38 +624,25 @@ endfunction()
 # ---------------------------------------------------------------------------
 # c4h_auto_subdirectories([EXCLUDE <dirs...>])
 #
-# Automatically calls add_subdirectory() for every direct child directory of
-# CMAKE_CURRENT_SOURCE_DIR that contains a CMakeLists.txt.  Directories are
-# processed in alphabetical order.
+# Convenience for add_subdirectory(): calls add_subdirectory() for every direct
+# child directory of CMAKE_CURRENT_SOURCE_DIR that contains a CMakeLists.txt,
+# in alphabetical order. Call it explicitly wherever you want the descent to
+# happen — it is NOT triggered automatically by the c4h_add_* functions.
 #
-# Normally you do NOT need to call this function explicitly.  Any c4h_add_*
-# call schedules it via cmake_language(DEFER) to run at the end of the
-# enclosing CMakeLists.txt scope, so subdirectories are always picked up
-# without any extra boilerplate.
+#   EXCLUDE   directory names (not paths) to skip.
 #
-# The only reason to call it explicitly is when EXCLUDE is needed to skip
-# specific subdirectories, or in a purely structural CMakeLists.txt that has
-# no c4h_add_* call of its own.
+# Equivalent plain CMake (the function just saves you the loop):
 #
-# EXCLUDE: directory names (not paths) to skip.  An explicit call with EXCLUDE
-#          takes precedence over the automatically deferred call.
+#   add_subdirectory(plugins)
+#   add_subdirectory(test)
+#   ...one line per child directory with a CMakeLists.txt...
 #
-# Like source globbing, this uses a CONFIGURE_DEPENDS glob so CMake re-runs
-# automatically when the directory's child list changes.
+# This uses a CONFIGURE_DEPENDS glob so CMake re-runs automatically when the
+# directory's child list changes. Prefer explicit add_subdirectory() calls when
+# you want the subdirectory set to be visible and fixed in the CMakeLists.txt.
 # ---------------------------------------------------------------------------
 function(c4h_auto_subdirectories)
     cmake_parse_arguments(C4H_ASD "" "" "EXCLUDE" ${ARGN})
-
-    # If already run explicitly in this directory, the deferred call (which
-    # arrives with no arguments) is a no-op.
-    get_property(_done DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-                 PROPERTY _C4H_AUTO_SUBDIRS_DONE)
-    if(_done AND NOT C4H_ASD_EXCLUDE AND NOT C4H_ASD_UNPARSED_ARGUMENTS)
-        # Deferred no-arg call after an explicit call already ran — skip.
-        return()
-    endif()
-    set_property(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-                 PROPERTY _C4H_AUTO_SUBDIRS_DONE TRUE)
 
     file(GLOB _children
         LIST_DIRECTORIES true
@@ -608,11 +663,14 @@ function(c4h_auto_subdirectories)
 endfunction()
 
 # ---------------------------------------------------------------------------
-# Top-level utility: format target
+# Top-level utility: format target  (OPTIONAL convenience)
 #
-# Runs clang-format -i over all sources accumulated in C4H_ALL_SOURCES.
-# Define this target once in the top-level CMakeLists.txt after all
-# add_subdirectory() calls (so C4H_ALL_SOURCES is fully populated).
+# Runs clang-format -i over all sources accumulated in C4H_ALL_SOURCES (the
+# list every c4h_add_* call appends to). Define this target once in the
+# top-level CMakeLists.txt after all add_subdirectory() calls (so
+# C4H_ALL_SOURCES is fully populated). Skipped quietly if clang-format is
+# absent. To format a hand-maintained source list instead, define your own
+# `format` custom target in plain CMake.
 # ---------------------------------------------------------------------------
 function(c4h_add_format_target)
     get_property(_all_sources GLOBAL PROPERTY C4H_ALL_SOURCES)

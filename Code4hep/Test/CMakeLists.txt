@@ -3,5 +3,5 @@
 # Header-only package: no library target generated.
 # Add include path to consumers via target_include_directories if needed.
 
-# Subdirectories with their own CMakeLists.txt are picked up automatically.
+# Descend into child package directories (one add_subdirectory each).
 c4h_auto_subdirectories()

@@ -12,5 +12,5 @@ c4h_add_library(
         ROOT::Geom
 )
 
-# Subdirectories with their own CMakeLists.txt are picked up automatically.
+# Descend into child package directories (one add_subdirectory each).
 c4h_auto_subdirectories()
