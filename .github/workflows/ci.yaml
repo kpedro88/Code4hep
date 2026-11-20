@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  # reserved for starting the CI from c4h-dist after a new c4h-full image
+  repository_dispatch:
+    types: [c4h-full-updated]
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    container: &container
+      image: ghcr.io/code4hep/c4h-full:latest
+      # needed while the package is private
+      # credentials:
+      #   username: ${{ github.actor }}
+      #   password: ${{ secrets.GITHUB_TOKEN }}
+      # preinstalled host toolchains, removed to free disk space for the build
+      volumes:
+        - /usr/share/dotnet:/host/dotnet
+        - /usr/local/lib/android:/host/android
+        - /opt/ghc:/host/ghc
+        - /opt/hostedtoolcache:/host/toolcache
+    defaults: &defaults
+      run:
+        # login shell, so that /etc/profile.d/c4henv.sh defines c4henv
+        shell: bash -leo pipefail {0}
+    steps:
+      - &free-disk
+        name: Free host disk space
+        run: rm -rf /host/dotnet/* /host/android/* /host/ghc/* /host/toolcache/*
+      - uses: actions/checkout@v7
+      - &build
+        name: Build in a development area
+        run: c4hinit "$RUNNER_TEMP/area" --source "$GITHUB_WORKSPACE"
+      - name: Tests
+        run: |
+          cd "$RUNNER_TEMP/area"
+          c4henv
+          ctest --test-dir "$(readlink -f build)" --output-on-failure
+
+  static-analysis:
+    runs-on: ubuntu-latest
+    container: *container
+    defaults: *defaults
+    steps:
+      - *free-disk
+      - uses: actions/checkout@v7
+      - *build
+      # Both checks only report until the project has .clang-tidy and
+      # .clang-format files; the default styles would flag nearly everything.
+      - name: clang-tidy
+        continue-on-error: true
+        run: run-clang-tidy -quiet -p "$(readlink -f "$RUNNER_TEMP/area/build")" "^$GITHUB_WORKSPACE/"
+      - name: clang-format
+        continue-on-error: true
+        run: git ls-files '*.cc' '*.cpp' '*.cxx' '*.h' '*.hpp' | xargs -r clang-format --dry-run --Werror
