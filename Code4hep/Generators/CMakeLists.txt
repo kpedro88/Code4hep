@@ -9,7 +9,9 @@ c4h_add_library(
         CLHEP::CLHEP
         EDM4HEP::edm4hep
         HepMC3::HepMC3
-        Geant4::Geant4
+        Geant4::G4event
+        Geant4::G4particles
+        Geant4::G4global
         podio::podio
         Python3::Python
         Pythia8::Pythia8

@@ -18,6 +18,10 @@ find_dependency(pybind11 REQUIRED)
 # Stitched is a mandatory upstream; load it transitively.
 find_dependency(Stitched REQUIRED)
 
+# The exported G4Application and Generators targets link Geant4's category
+# library targets.
+find_dependency(Geant4 CONFIG)
+
 # Load the Code4hep build-helper functions.
 include("${CMAKE_CURRENT_LIST_DIR}/Code4hepBuildFunctions.cmake")
 

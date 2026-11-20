@@ -73,7 +73,7 @@ if(NOT _c4h_ext_init)
     # Name differs from namespace
     set_property(GLOBAL PROPERTY C4H_EXT_NAME_SQLite "SQLite3")
     # Packages that require CONFIG mode
-    foreach(_ns IN ITEMS podio EDM4HEP cmsswdata nlohmann_json HepMC3)
+    foreach(_ns IN ITEMS podio EDM4HEP cmsswdata nlohmann_json HepMC3 Geant4)
         set_property(GLOBAL PROPERTY "C4H_EXT_ARGS_${_ns}" "CONFIG")
     endforeach()
     # Packages that require specific components
