@@ -410,8 +410,9 @@ endfunction()
 #   SOURCES   Source glob patterns. Defaults to bin/<name>.cc, else bin/*.cc.
 #   DEPS      Internal dependencies (shorthand).
 #   EXT_DEPS  External dependencies (fully-qualified imported targets).
-#   TEST      Also register the executable as a CTest test named <name>, with
-#             the same environment and working directory as c4h_add_test.
+#   TEST      Register the executable as a CTest test named <name>, with the
+#             same environment and working directory as c4h_add_test, instead
+#             of installing it.
 #
 # ≡ PLAIN CMAKE. c4h_add_executable(NAME foo DEPS Code4hep/PodioUtilities)
 # expands to:
@@ -456,12 +457,12 @@ function(c4h_add_executable)
 
     if(C4H_EXE_TEST)
         c4h_add_test(NAME "${C4H_EXE_NAME}" COMMAND "${_target}")
+    else()
+        install(TARGETS ${_target}
+            EXPORT  "${PROJECT_NAME}Targets"
+            RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
+        )
     endif()
-
-    install(TARGETS ${_target}
-        EXPORT  "${PROJECT_NAME}Targets"
-        RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
-    )
 endfunction()
 
 # ---------------------------------------------------------------------------
