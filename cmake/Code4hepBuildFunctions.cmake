@@ -462,13 +462,16 @@ endfunction()
 # 5. c4h_add_test  (OPTIONAL convenience)
 #
 # SCRAM equivalent: <test name="..." command="...">
-# Registers a script-based test with CTest, run from the current source
-# directory.
+# Registers a test with CTest. It runs in the current binary directory, so that
+# its outputs stay out of the source tree; scripts should find their inputs
+# relative to their own location ($(dirname "$0")).
 #
-#   NAME     Test name (required).
-#   COMMAND  Command to run (required).
-#   DEPS     Internal dependencies whose build directories are prepended to
-#            LD_LIBRARY_PATH so the test finds in-tree libraries at runtime.
+#   NAME         Test name (required).
+#   COMMAND      Command to run (required). A first word naming a file in the
+#                current source directory (e.g. a script) is run from there.
+#   DEPS         Internal dependencies whose build directories are prepended to
+#                LD_LIBRARY_PATH so the test finds in-tree libraries at runtime.
+#   ENVIRONMENT  Additional VAR=value settings for the test.
 #
 # The build tree's library directory (CMAKE_LIBRARY_OUTPUT_DIRECTORY, if set) and
 # Python directory (STITCHED_PYTHON_BUILD_DIR) are always prepended to
@@ -479,7 +482,8 @@ endfunction()
 # ≡ PLAIN CMAKE. c4h_add_test(NAME t COMMAND run.sh DEPS Code4hep/PodioUtilities)
 # expands to:
 #
-#   add_test(NAME t COMMAND run.sh WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+#   add_test(NAME t COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/run.sh
+#       WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
 #   set_tests_properties(t PROPERTIES
 #       ENVIRONMENT_MODIFICATION
 #           "LD_LIBRARY_PATH=path_list_prepend:${CMAKE_LIBRARY_OUTPUT_DIRECTORY}"
@@ -491,7 +495,7 @@ endfunction()
 # and LABELS for you.
 # ---------------------------------------------------------------------------
 function(c4h_add_test)
-    cmake_parse_arguments(C4H_TST "" "NAME" "COMMAND;DEPS" ${ARGN})
+    cmake_parse_arguments(C4H_TST "" "NAME" "COMMAND;DEPS;ENVIRONMENT" ${ARGN})
 
     if(NOT C4H_TST_NAME)
         message(FATAL_ERROR "c4h_add_test: NAME is required.")
@@ -500,9 +504,13 @@ function(c4h_add_test)
         message(FATAL_ERROR "c4h_add_test: COMMAND is required.")
     endif()
 
+    list(POP_FRONT C4H_TST_COMMAND _cmd)
+    if(NOT TARGET "${_cmd}" AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${_cmd}")
+        set(_cmd "${CMAKE_CURRENT_SOURCE_DIR}/${_cmd}")
+    endif()
     add_test(NAME "${C4H_TST_NAME}"
-        COMMAND ${C4H_TST_COMMAND}
-        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        COMMAND "${_cmd}" ${C4H_TST_COMMAND}
+        WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
     )
 
     # Prepend the build tree and the dependency build directories to the paths.
@@ -515,6 +523,10 @@ function(c4h_add_test)
         if(TARGET "${_dep}")
             list(APPEND _env "LD_LIBRARY_PATH=path_list_prepend:$<TARGET_FILE_DIR:${_dep}>")
         endif()
+    endforeach()
+    foreach(_setting IN LISTS C4H_TST_ENVIRONMENT)
+        string(REGEX REPLACE "^([^=]+)=(.*)$" "\\1=set:\\2" _setting "${_setting}")
+        list(APPEND _env "${_setting}")
     endforeach()
     set_tests_properties("${C4H_TST_NAME}" PROPERTIES ENVIRONMENT_MODIFICATION "${_env}")
 

@@ -1,13 +1,11 @@
 #!/bin/bash
-
-# put included files in test directory
-echo $PWD
-export DD4HEP_XML_DIR=$(dirname $(readlink -f $(which ddeve)))/../DDDetectors/compact
-ln -sf ${DD4HEP_XML_DIR}/elements.xml .
-ln -sf ${DD4HEP_XML_DIR}/materials.xml .
-C4H_DIR=$(readlink -f ${PWD}/../../../)
-INSTALL_DIR=$(readlink -f ${C4H_DIR}/../)
-# this is a very temporary hack around edm::FileInPath restrictions
-export CMSSW_SEARCH_PATH=${C4H_DIR}
-export CMSSW_BASE=${INSTALL_DIR}
-cmsRun testGeo.py
+# Runs in the build tree. testGeo.xml includes elements.xml and materials.xml
+# relative to its own location, so a copy of it is placed here next to links to
+# DD4hep's files; CMSSW_SEARCH_PATH (set by the test) makes edm::FileInPath find
+# this copy.
+set -e
+test_dir=$(dirname "$(readlink -f "$0")")
+dd4hep_xml_dir=$(dirname "$(readlink -f "$(which ddeve)")")/../DDDetectors/compact
+ln -sf "$dd4hep_xml_dir/elements.xml" "$dd4hep_xml_dir/materials.xml" .
+cp "$test_dir/testGeo.xml" .
+cmsRun "$test_dir/testGeo.py"

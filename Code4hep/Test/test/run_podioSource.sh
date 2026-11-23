@@ -3,8 +3,11 @@
 # Pass in name and status
 function die { echo $1: status $2 ;  exit $2; }
 
-F1=testPodioSource_cfg.py
-F2=testPodioSource2_cfg.py
+# Runs in the build tree: the configurations are read from this script's
+# directory, and all files are written to the current directory.
+test_dir=$(dirname "$(readlink -f "$0")")
+F1=$test_dir/testPodioSource_cfg.py
+F2=$test_dir/testPodioSource2_cfg.py
 
 # create an input file to use as input for the test
 createEDM4hepFile.py
