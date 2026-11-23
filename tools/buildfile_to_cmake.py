@@ -805,6 +805,9 @@ def _convert_bin(node: BinNode, ctx: ConvertContext,
         args.append(("DEPS", internal_deps))
     if external_deps:
         args.append(("EXT_DEPS", external_deps))
+    # SCRAM runs the binaries of a test/ BuildFile as unit tests.
+    if pathlib.Path(ctx.filepath).parent.name == "test":
+        args.append(("TEST", None))
 
     out = list(dep_warnings)
     out.extend(_report_dropped(ctx, node.line, [

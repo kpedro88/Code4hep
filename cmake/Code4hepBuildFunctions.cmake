@@ -410,6 +410,8 @@ endfunction()
 #   SOURCES   Source glob patterns. Defaults to bin/<name>.cc, else bin/*.cc.
 #   DEPS      Internal dependencies (shorthand).
 #   EXT_DEPS  External dependencies (fully-qualified imported targets).
+#   TEST      Also register the executable as a CTest test named <name>, with
+#             the same environment and working directory as c4h_add_test.
 #
 # ≡ PLAIN CMAKE. c4h_add_executable(NAME foo DEPS Code4hep/PodioUtilities)
 # expands to:
@@ -424,7 +426,7 @@ endfunction()
 # [*] = the DEPS shorthand / EXT_DEPS find_package() conventions; see the guide.
 # ---------------------------------------------------------------------------
 function(c4h_add_executable)
-    cmake_parse_arguments(C4H_EXE "" "NAME" "SOURCES;DEPS;EXT_DEPS" ${ARGN})
+    cmake_parse_arguments(C4H_EXE "TEST" "NAME" "SOURCES;DEPS;EXT_DEPS" ${ARGN})
 
     if(NOT C4H_EXE_NAME)
         message(FATAL_ERROR "c4h_add_executable: NAME is required.")
@@ -450,6 +452,10 @@ function(c4h_add_executable)
     _c4h_resolve_deps("${C4H_EXE_EXT_DEPS}" _resolved_ext_deps)
     if(_resolved_deps OR _resolved_ext_deps)
         target_link_libraries(${_target} PRIVATE ${_resolved_deps} ${_resolved_ext_deps})
+    endif()
+
+    if(C4H_EXE_TEST)
+        c4h_add_test(NAME "${C4H_EXE_NAME}" COMMAND "${_target}")
     endif()
 
     install(TARGETS ${_target}

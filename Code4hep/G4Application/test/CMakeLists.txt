@@ -5,6 +5,7 @@
 c4h_add_executable(
     NAME testCode4hepG4SimProducerTP
     SOURCES test_catch2_*.cc
+    TEST
     DEPS FWCore/TestProcessor
     EXT_DEPS Catch2::Catch2
 )

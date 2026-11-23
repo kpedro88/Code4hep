@@ -5,6 +5,7 @@
 c4h_add_executable(
     NAME testCode4hepIOCatch2
     SOURCES test_catch2_*.cc
+    TEST
     DEPS FWCore/TestProcessor
     EXT_DEPS
         Python3::Python

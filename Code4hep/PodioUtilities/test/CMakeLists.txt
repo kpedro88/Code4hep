@@ -5,6 +5,7 @@
 c4h_add_executable(
     NAME testCode4hepPodioUtilitiesCatch2
     SOURCES test_catch2_*.cc
+    TEST
     DEPS Code4hep/PodioUtilities
     EXT_DEPS
         Catch2::Catch2
