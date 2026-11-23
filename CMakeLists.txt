@@ -52,7 +52,7 @@ enable_testing()
 # subdirectory that has a CMakeLists.txt — no manual listing needed.
 add_subdirectory(Code4hep)
 
-# clang-format target — after all subdirectories so C4H_ALL_SOURCES is complete.
+# clang-format targets — after all subdirectories so C4H_ALL_SOURCES is complete.
 c4h_add_format_target()
 
 # ---------------------------------------------------------------------------

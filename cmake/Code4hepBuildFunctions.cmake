@@ -312,7 +312,7 @@ function(c4h_add_library)
         SOVERSION "${_C4H_MAJOR}"
     )
 
-    set_property(GLOBAL APPEND PROPERTY C4H_ALL_SOURCES ${_sources})
+    set_property(GLOBAL APPEND PROPERTY C4H_ALL_SOURCES ${_sources} ${_headers})
 
     # --- Auto-detect ROOT dictionary (src/classes.h + src/classes_def.xml) ---
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/classes.h" AND
@@ -454,6 +454,8 @@ function(c4h_add_executable)
     if(_resolved_deps OR _resolved_ext_deps)
         target_link_libraries(${_target} PRIVATE ${_resolved_deps} ${_resolved_ext_deps})
     endif()
+
+    set_property(GLOBAL APPEND PROPERTY C4H_ALL_SOURCES ${_sources})
 
     if(C4H_EXE_TEST)
         c4h_add_test(NAME "${C4H_EXE_NAME}" COMMAND "${_target}")
@@ -627,14 +629,15 @@ function(c4h_auto_subdirectories)
 endfunction()
 
 # ---------------------------------------------------------------------------
-# Top-level utility: format target  (OPTIONAL convenience)
+# Top-level utility: format targets  (OPTIONAL convenience)
 #
-# Runs clang-format -i over all sources accumulated in C4H_ALL_SOURCES (the
-# list every c4h_add_* call appends to). Define this target once in the
-# top-level CMakeLists.txt after all add_subdirectory() calls (so
+# `format` runs clang-format -i over all sources and library headers accumulated
+# in C4H_ALL_SOURCES (the list every c4h_add_* call appends to); `format-check`
+# only reports differences and fails if there are any. Define these targets once
+# in the top-level CMakeLists.txt after all add_subdirectory() calls (so
 # C4H_ALL_SOURCES is fully populated). Skipped quietly if clang-format is
 # absent. To format a hand-maintained source list instead, define your own
-# `format` custom target in plain CMake.
+# custom targets in plain CMake.
 # ---------------------------------------------------------------------------
 function(c4h_add_format_target)
     get_property(_all_sources GLOBAL PROPERTY C4H_ALL_SOURCES)
@@ -644,7 +647,11 @@ function(c4h_add_format_target)
             COMMAND "${CLANG_FORMAT_EXECUTABLE}" -i ${_all_sources}
             COMMENT "Running clang-format over all Code4hep sources"
         )
+        add_custom_target(format-check
+            COMMAND "${CLANG_FORMAT_EXECUTABLE}" --dry-run --Werror ${_all_sources}
+            COMMENT "Checking the formatting of all Code4hep sources"
+        )
     else()
-        message(STATUS "c4h: clang-format not found; 'format' target disabled.")
+        message(STATUS "c4h: clang-format not found; 'format' and 'format-check' targets disabled.")
     endif()
 endfunction()
