@@ -15,15 +15,15 @@ and all its dependencies installed with Spack, plus two helper commands from
 [c4h-dist](https://github.com/code4hep/c4h-dist):
 
 ```
-c4hinit <area> [--source <path> | --ref <git-ref>] [--repo <url>] [-j N]
+c4hinit <area> [--source <path> | [--ref <git-ref>] [--repo <url>]] [-j N]
 cd <area>
 c4henv
 ctest --test-dir build
 ```
 
 `c4hinit` creates a development area in which only Code4hep is rebuilt (with
-`spack develop`) on top of the installed release; `c4henv` sets up the run-time
-environment for it. After editing the sources, rebuild with
+`spack develop`) on top of the installed release; `c4henv` (bash or tcsh) sets
+up the run-time environment for it. After editing the sources, rebuild with
 `spack -e <area> install`. See the c4h-dist README for details.
 
 ## Continuous integration
