@@ -470,16 +470,25 @@ endfunction()
 #   DEPS     Internal dependencies whose build directories are prepended to
 #            LD_LIBRARY_PATH so the test finds in-tree libraries at runtime.
 #
+# The build tree's library directory (CMAKE_LIBRARY_OUTPUT_DIRECTORY, if set) and
+# Python directory (STITCHED_PYTHON_BUILD_DIR) are always prepended to
+# LD_LIBRARY_PATH and PYTHONPATH. Stitched's PluginManager uses the first plugin
+# cache on LD_LIBRARY_PATH that provides a plugin, so the test runs the freshly
+# built plugins even when an installed copy of the project is also on the path.
+#
 # ≡ PLAIN CMAKE. c4h_add_test(NAME t COMMAND run.sh DEPS Code4hep/PodioUtilities)
 # expands to:
 #
 #   add_test(NAME t COMMAND run.sh WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 #   set_tests_properties(t PROPERTIES
-#       ENVIRONMENT "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:Code4hep::PodioUtilities>:$ENV{LD_LIBRARY_PATH}"
+#       ENVIRONMENT_MODIFICATION
+#           "LD_LIBRARY_PATH=path_list_prepend:${CMAKE_LIBRARY_OUTPUT_DIRECTORY}"
+#           "PYTHONPATH=path_list_prepend:${STITCHED_PYTHON_BUILD_DIR}"
+#           "LD_LIBRARY_PATH=path_list_prepend:$<TARGET_FILE_DIR:Code4hep::PodioUtilities>"
 #       LABELS "<package-path>")
 #
-# The wrapper only resolves the DEPS shorthand and assembles the LD_LIBRARY_PATH
-# and LABELS strings for you.
+# The wrapper only resolves the DEPS shorthand and assembles the environment
+# and LABELS for you.
 # ---------------------------------------------------------------------------
 function(c4h_add_test)
     cmake_parse_arguments(C4H_TST "" "NAME" "COMMAND;DEPS" ${ARGN})
@@ -496,19 +505,18 @@ function(c4h_add_test)
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     )
 
-    # Prepend dependency build directories to LD_LIBRARY_PATH.
+    # Prepend the build tree and the dependency build directories to the paths.
+    set(_env "PYTHONPATH=path_list_prepend:${STITCHED_PYTHON_BUILD_DIR}")
+    if(CMAKE_LIBRARY_OUTPUT_DIRECTORY)
+        list(APPEND _env "LD_LIBRARY_PATH=path_list_prepend:${CMAKE_LIBRARY_OUTPUT_DIRECTORY}")
+    endif()
     _c4h_resolve_deps("${C4H_TST_DEPS}" _resolved_deps)
-    set(_lib_dirs)
     foreach(_dep IN LISTS _resolved_deps)
         if(TARGET "${_dep}")
-            list(APPEND _lib_dirs "$<TARGET_FILE_DIR:${_dep}>")
+            list(APPEND _env "LD_LIBRARY_PATH=path_list_prepend:$<TARGET_FILE_DIR:${_dep}>")
         endif()
     endforeach()
-    if(_lib_dirs)
-        string(JOIN ":" _lib_path_str ${_lib_dirs})
-        set_tests_properties("${C4H_TST_NAME}" PROPERTIES
-            ENVIRONMENT "LD_LIBRARY_PATH=${_lib_path_str}:\$ENV{LD_LIBRARY_PATH}")
-    endif()
+    set_tests_properties("${C4H_TST_NAME}" PROPERTIES ENVIRONMENT_MODIFICATION "${_env}")
 
     # Package label for `ctest -L`.
     _c4h_derive_target_name(_auto _pkg_path)
